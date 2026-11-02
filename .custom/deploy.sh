@@ -55,10 +55,26 @@ else
             ;;
     esac
 
-    # 国内 VPS 默认优先使用 gh-proxy.org 加速，也可通过 GH_PROXY 环境变量指定
-    GH_PROXY="${GH_PROXY:-${GITHUB_PROXY:-https://gh-proxy.org/}}"
-    if [ -n "${GH_PROXY}" ]; then
+    # 从 config.json (或 config.json.example) 读取 GitHub 加速代理，也可由 GH_PROXY 环境变量覆盖
+    CONFIG_FILE="${SCRIPT_DIR}/config.json"
+    CONFIG_EXAMPLE="${SCRIPT_DIR}/config.json.example"
+
+    GH_PROXY="${GH_PROXY:-${GITHUB_PROXY:-}}"
+    if [ -z "${GH_PROXY}" ] && [ -f "${CONFIG_FILE}" ]; then
+        GH_PROXY=$(python3 -c "import json; cfg=json.load(open('${CONFIG_FILE}')); print(cfg.get('general', {}).get('github_proxy', ''))" 2>/dev/null || echo "")
+    fi
+    if [ -z "${GH_PROXY}" ] && [ -f "${CONFIG_EXAMPLE}" ]; then
+        GH_PROXY=$(python3 -c "import json; cfg=json.load(open('${CONFIG_EXAMPLE}')); print(cfg.get('general', {}).get('github_proxy', ''))" 2>/dev/null || echo "")
+    fi
+    if [ -z "${GH_PROXY}" ]; then
+        GH_PROXY="https://gh-proxy.org/"
+    fi
+
+    # 规范化代理前缀 (带尾随斜杠；若用户显式填 "" 或 "direct" 则直连)
+    if [ -n "${GH_PROXY}" ] && [ "${GH_PROXY}" != "direct" ] && [ "${GH_PROXY}" != "none" ]; then
         GH_PROXY="${GH_PROXY%/}/"
+    else
+        GH_PROXY=""
     fi
 
     DOWNLOAD_URL="https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/cfst_${PKG_ARCH}.tar.gz"

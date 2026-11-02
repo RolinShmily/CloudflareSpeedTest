@@ -170,6 +170,7 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "random_delay_minutes": 0                  // 随机抖动延迟 (分钟)，防止集群整点冲击
   },
   "general": {
+    "github_proxy": "https://gh-proxy.org/",   // GitHub Release 下载加速代理 (国内 VPS 默认推荐，可换为其他镜像或留空直连)
     "log_level": "INFO",                       // 日志级别: DEBUG / INFO / WARNING / ERROR
     "log_file": "cfst_ddns.log"                // 日志保存文件
   }
