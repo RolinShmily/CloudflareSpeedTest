@@ -1,0 +1,47 @@
+{
+  "cloudflare": {
+    "api_token": "YOUR_CLOUDFLARE_API_TOKEN",
+    "zone_name": "example.com",
+    "zone_id": "",
+    "record_names": [
+      "*.cf.example.com",
+      "cf.example.com"
+    ],
+    "record_type": "A",
+    "ttl": 60,
+    "proxied": false,
+    "comment": "Auto-updated by CloudflareSpeedTest"
+  },
+  "speedtest": {
+    "binary_path": "cfst",
+    "ip_file": "ip.txt",
+    "specified_ips": [],
+    "test_url": "https://cf.xiu2.xyz/url",
+    "port": 443,
+    "thread_count": 200,
+    "ping_times": 4,
+    "candidate_pool_size": 15,
+    "download_time": 10,
+    "httping": false,
+    "httping_code": 200,
+    "colo": "",
+    "extra_args": []
+  },
+  "filter": {
+    "target_ip_count": 5,
+    "min_qualified_ips": 3,
+    "sort_by": "speed",
+    "min_delay_ms": 0.0,
+    "max_delay_ms": 200.0,
+    "max_loss_rate": 0.05,
+    "min_speed_mb": 5.0
+  },
+  "schedule": {
+    "interval_hours": 6,
+    "random_delay_minutes": 0
+  },
+  "general": {
+    "log_level": "INFO",
+    "log_file": "cfst_ddns.log"
+  }
+}

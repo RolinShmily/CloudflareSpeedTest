@@ -2,3 +2,22 @@ dist
 Releases
 *.exe
 *.csv
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Custom DDNS artifacts & secrets
+.custom/config.json
+.custom/*.log
+.custom/*.csv
+.custom/cfst
+.custom/CloudflareSpeedTest
+.custom/result*.csv
+cfst
+CloudflareSpeedTest
+cfst_*
+*.tar.gz
+*.zip
+使用+错误+反馈说明.txt
+
