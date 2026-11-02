@@ -69,7 +69,7 @@ def find_ip_file(configured_ip_file: str, base_dir: Optional[Path] = None) -> Pa
         if cand.is_file():
             return cand.resolve()
 
-    raise FileNotFoundError(f"未找到 IP 测速数据文件: {configured_ip_file}，请检查路径。")
+    raise FileNotFoundError(f"未找到本地 IP 测速数据文件: {configured_ip_file}，请确保仓库根目录存在 ip.txt。")
 
 
 def run_speedtest(

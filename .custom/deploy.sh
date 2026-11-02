@@ -25,10 +25,16 @@ fi
 
 echo "[✓] Python 版本: $(python3 --version)"
 
-# 2. 检查或下载 CloudflareSpeedTest 可执行文件
+# 2. 检查或准备 CloudflareSpeedTest 可执行文件
 CFST_BIN="${ROOT_DIR}/cfst"
-if [ ! -f "${CFST_BIN}" ] && [ ! -f "${ROOT_DIR}/CloudflareSpeedTest" ]; then
-    echo "[*] 未在项目根目录找到 cfst 可执行文件，检测系统架构并准备官方预编译版本..."
+if [ -f "${CFST_BIN}" ] || [ -f "${ROOT_DIR}/CloudflareSpeedTest" ]; then
+    echo "[✓] 检测到本地已存在 cfst 测速程序，跳过准备步骤"
+elif command -v go &> /dev/null && [ -f "${ROOT_DIR}/main.go" ]; then
+    echo "[*] 检测到本地 Go 环境，直接从当前仓库源码本地编译 cfst..."
+    (cd "${ROOT_DIR}" && go build -ldflags "-s -w" -o cfst main.go)
+    echo "[✓] 本地编译完成: ${ROOT_DIR}/cfst"
+else
+    echo "[*] 本地未找到 cfst 可执行文件且无 Go 环境，检测架构并下载官方预编译版本..."
     ARCH="$(uname -m)"
     case "${ARCH}" in
         x86_64|amd64)
@@ -44,20 +50,26 @@ if [ ! -f "${CFST_BIN}" ] && [ ! -f "${ROOT_DIR}/CloudflareSpeedTest" ]; then
             PKG_ARCH="linux_armv7"
             ;;
         *)
-            echo "[错误] 未识别的架构: ${ARCH}，请手动前往 GitHub Releases 下载对应的二进制文件并重命名为 cfst"
+            echo "[错误] 未识别的架构: ${ARCH}，请手动下载对应的二进制文件并重命名为 cfst 放置于项目根目录"
             exit 1
             ;;
     esac
 
+    # 国内 VPS 默认优先使用 gh-proxy.org 加速，也可通过 GH_PROXY 环境变量指定
+    GH_PROXY="${GH_PROXY:-${GITHUB_PROXY:-https://gh-proxy.org/}}"
+    if [ -n "${GH_PROXY}" ]; then
+        GH_PROXY="${GH_PROXY%/}/"
+    fi
+
     DOWNLOAD_URL="https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/cfst_${PKG_ARCH}.tar.gz"
-    MIRROR_URL="https://mirror.ghproxy.com/${DOWNLOAD_URL}"
+    PROXIED_URL="${GH_PROXY}${DOWNLOAD_URL}"
     TMP_TGZ="/tmp/cfst_${PKG_ARCH}.tar.gz"
 
-    echo "[*] 正在从 GitHub 官方仓库下载: ${DOWNLOAD_URL}"
-    if ! curl -fsSL --connect-timeout 10 -o "${TMP_TGZ}" "${DOWNLOAD_URL}"; then
-        echo "[!] 直连 GitHub 下载失败或超时，尝试通过国内加速镜像下载: ${MIRROR_URL}"
-        if ! curl -fsSL --connect-timeout 15 -o "${TMP_TGZ}" "${MIRROR_URL}"; then
-            echo "[错误] 自动下载失败！请手动下载 ${DOWNLOAD_URL}，解压出 cfst 可执行程序并放置于 ${ROOT_DIR}/ 目录下。"
+    echo "[*] 正在下载官方预编译包: ${PROXIED_URL}"
+    if ! curl -fsSL --connect-timeout 15 -o "${TMP_TGZ}" "${PROXIED_URL}"; then
+        echo "[!] 代理下载失败，尝试直连 GitHub: ${DOWNLOAD_URL}"
+        if ! curl -fsSL --connect-timeout 10 -o "${TMP_TGZ}" "${DOWNLOAD_URL}"; then
+            echo "[错误] 下载失败！请手动下载 ${DOWNLOAD_URL}，将其中的 cfst 文件放置于 ${ROOT_DIR}/ 目录下。"
             exit 1
         fi
     fi
