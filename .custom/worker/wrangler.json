@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-speedtest-hub",
+  "main": "src/index.js",
+  "compatibility_date": "2024-11-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "cf.269601.xyz/*",
+      "zone_name": "269601.xyz"
+    }
+  ],
+  "vars": {
+    "BASE_DOMAIN": "cf.269601.xyz"
+  }
+}

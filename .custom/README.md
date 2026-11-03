@@ -33,6 +33,10 @@
 ├── config.json            # 生产配置文件 (被 .gitignore 保护，避免泄露秘钥)
 ├── test_suite.py          # 单元与集成测试套件
 ├── deploy.sh              # Debian / Linux 一键部署与安装脚本
+├── worker/                # ★ 优选节点随机域名生成器 (Cloudflare Worker 静态网关)
+│   ├── wrangler.json      # Worker 路由与部署配置 (wrangler v3 规范)
+│   ├── package.json       # 项目元数据
+│   └── src/index.js       # 纯静态响应，居中极简卡片，支持一键复制与高亮
 ├── systemd/
 │   ├── cfst-ddns.service  # systemd 服务定义
 │   └── cfst-ddns.timer    # systemd 6 小时定时触发器
@@ -132,9 +136,8 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "api_token": "YOUR_CLOUDFLARE_API_TOKEN", // Cloudflare API 令牌 (DNS Edit 权限)
     "zone_name": "example.com",                // 根域名
     "zone_id": "",                             // 可选，留空时程序会自动通过 zone_name 查询
-    "record_names": [                         // 目标解析名称列表 (同时同步泛解析与根前缀)
-      "*.cf.example.com",
-      "cf.example.com"
+    "record_names": [                         // 目标解析名称列表 (只保留泛解析，cf 根节点留给 Worker)
+      "*.cf.example.com"
     ],
     "record_type": "A",                        // A (IPv4) 或 AAAA (IPv6)
     "ttl": 60,                                 // DNS TTL (秒)

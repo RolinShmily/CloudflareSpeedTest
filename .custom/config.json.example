@@ -4,8 +4,7 @@
     "zone_name": "example.com",
     "zone_id": "",
     "record_names": [
-      "*.cf.example.com",
-      "cf.example.com"
+      "*.cf.example.com"
     ],
     "record_type": "A",
     "ttl": 60,
