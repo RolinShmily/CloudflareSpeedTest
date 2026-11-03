@@ -1,6 +1,6 @@
 /**
  * Cloudflare Worker: 优选节点随机泛域名生成器
- * 纯黑白极简端庄质感，支持动态配置基准域名并持久化保存
+ * 纯黑白极简端庄质感，平滑抗锯齿优化，支持自定义基准域名并持久化保存
  */
 
 export default {
@@ -17,31 +17,39 @@ export default {
   <style>
     :root {
       --bg: #09090b;
-      --card-bg: rgba(18, 18, 20, 0.95);
-      --border: rgba(255, 255, 255, 0.12);
-      --border-hover: rgba(255, 255, 255, 0.35);
+      --card-bg: #111114;
+      --card-sub-bg: #18181b;
+      --border: rgba(255, 255, 255, 0.1);
+      --border-hover: rgba(255, 255, 255, 0.3);
       --text: #ffffff;
       --text-secondary: #a1a1aa;
       --text-muted: #71717a;
       --btn-primary-bg: #ffffff;
       --btn-primary-text: #09090b;
       --btn-secondary-bg: #18181b;
-      --btn-secondary-border: rgba(255, 255, 255, 0.15);
+      --btn-secondary-border: rgba(255, 255, 255, 0.14);
+      --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "Cascadia Code", "SF Mono", Consolas, Menlo, Monaco, "Microsoft YaHei", monospace;
     }
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      font-synthesis: none;
     }
     body {
-      background: radial-gradient(circle at 50% 15%, #18181b 0%, var(--bg) 85%);
+      background: var(--bg);
+      background-image: radial-gradient(circle at 50% 12%, #1e1e24 0%, var(--bg) 80%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 24px 16px;
+      font-family: var(--font-main);
     }
     .container {
       width: 100%;
@@ -51,26 +59,26 @@ export default {
     .card {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       border-radius: 20px;
-      padding: 34px 28px;
-      box-shadow: 0 30px 60px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      padding: 36px 28px;
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.08) inset;
       text-align: center;
+      transform: translateZ(0);
+      backface-visibility: hidden;
     }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 7px;
       padding: 4px 14px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 9999px;
       font-size: 12px;
       color: #e4e4e7;
       font-weight: 500;
       margin-bottom: 18px;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.3px;
     }
     .badge::before {
       content: "";
@@ -78,12 +86,12 @@ export default {
       height: 5px;
       border-radius: 50%;
       background: #ffffff;
-      box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+      box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
     }
     h1 {
       font-size: 22px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
       color: #ffffff;
       margin-bottom: 6px;
     }
@@ -91,9 +99,10 @@ export default {
       color: var(--text-secondary);
       font-size: 13px;
       margin-bottom: 22px;
+      font-weight: 400;
     }
 
-    /* 域名主展示框 */
+    /* 域名展示卡片 */
     .domain-box {
       background: #000000;
       border: 1px solid var(--border);
@@ -101,37 +110,39 @@ export default {
       padding: 20px 16px;
       cursor: pointer;
       transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
       user-select: none;
     }
     .domain-box:hover {
       border-color: var(--border-hover);
       transform: translateY(-2px);
-      box-shadow: 0 8px 30px rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 26px rgba(255, 255, 255, 0.07);
     }
     .domain-box:active {
       transform: translateY(0);
     }
     .domain-display {
       font-size: 19px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
       word-break: break-all;
       display: flex;
       align-items: center;
       justify-content: center;
       flex-wrap: wrap;
-      gap: 2px;
+      gap: 3px;
+      font-family: var(--font-mono);
     }
     .prefix-highlight {
       color: #000000;
       background: #ffffff;
-      padding: 2px 10px;
+      padding: 3px 10px;
       border-radius: 6px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-weight: 700;
-      letter-spacing: 0.3px;
-      transition: all 0.25s ease;
+      letter-spacing: 0.4px;
+      display: inline-block;
+      line-height: 1.3;
+      transition: all 0.2s ease;
     }
     .dot {
       color: var(--text-muted);
@@ -140,7 +151,6 @@ export default {
     }
     .base-domain {
       color: #d4d4d8;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-weight: 500;
     }
     .copy-hint {
@@ -177,11 +187,11 @@ export default {
     .btn-primary {
       background: var(--btn-primary-bg);
       color: var(--btn-primary-text);
-      box-shadow: 0 4px 14px rgba(255, 255, 255, 0.15);
+      box-shadow: 0 4px 14px rgba(255, 255, 255, 0.12);
     }
     .btn-primary:hover {
       background: #f4f4f5;
-      box-shadow: 0 6px 20px rgba(255, 255, 255, 0.25);
+      box-shadow: 0 6px 18px rgba(255, 255, 255, 0.22);
     }
     .btn-secondary {
       background: var(--btn-secondary-bg);
@@ -190,7 +200,7 @@ export default {
     }
     .btn-secondary:hover {
       background: #27272a;
-      border-color: rgba(255, 255, 255, 0.3);
+      border-color: rgba(255, 255, 255, 0.28);
     }
     .btn:active {
       transform: scale(0.98);
@@ -217,17 +227,17 @@ export default {
       gap: 7px;
     }
     .chip {
-      background: #09090b;
+      background: #000000;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 8px;
-      padding: 8px 12px;
+      padding: 9px 12px;
       font-size: 13px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       cursor: pointer;
       transition: all 0.15s ease;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
     }
     .chip:hover {
       background: #18181b;
@@ -247,6 +257,7 @@ export default {
       align-items: center;
       gap: 4px;
       transition: color 0.15s ease;
+      font-family: var(--font-main);
     }
     .chip:hover .chip-copy-btn {
       color: #ffffff;
@@ -256,7 +267,7 @@ export default {
     .config-box {
       margin-top: 20px;
       padding: 14px 16px;
-      background: rgba(0, 0, 0, 0.6);
+      background: #000000;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 12px;
       text-align: left;
@@ -267,11 +278,7 @@ export default {
       align-items: center;
       font-size: 12px;
       color: var(--text-secondary);
-      cursor: pointer;
       user-select: none;
-    }
-    .config-header:hover {
-      color: #ffffff;
     }
     .config-header span {
       display: inline-flex;
@@ -289,10 +296,10 @@ export default {
       background: #18181b;
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 8px;
-      padding: 7px 10px;
+      padding: 8px 10px;
       color: #ffffff;
       font-size: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       outline: none;
       transition: border-color 0.2s;
     }
@@ -300,7 +307,7 @@ export default {
       border-color: #ffffff;
     }
     .config-btn {
-      padding: 7px 12px;
+      padding: 8px 13px;
       border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
@@ -320,7 +327,7 @@ export default {
       background: transparent;
       color: var(--text-muted);
       border: 1px solid transparent;
-      padding: 7px 8px;
+      padding: 8px 9px;
     }
     .config-btn-reset:hover {
       background: transparent;
@@ -335,11 +342,12 @@ export default {
       line-height: 1.6;
     }
     .info-footer code {
-      color: #d4d4d8;
+      color: #e4e4e7;
       background: rgba(255, 255, 255, 0.08);
       padding: 2px 5px;
       border-radius: 4px;
       font-size: 11px;
+      font-family: var(--font-mono);
     }
 
     /* 黑白 Toast 提示框 */
@@ -354,11 +362,14 @@ export default {
       border-radius: 9999px;
       font-size: 13px;
       font-weight: 600;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 15px rgba(255, 255, 255, 0.2);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 15px rgba(255, 255, 255, 0.15);
       opacity: 0;
       transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       pointer-events: none;
       z-index: 100;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     .toast.show {
       transform: translateX(-50%) translateY(0);
@@ -428,7 +439,10 @@ export default {
     </div>
   </div>
 
-  <div class="toast" id="toast">已成功复制到剪贴板！</div>
+  <div class="toast" id="toast">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    <span id="toastMsg">已成功复制到剪贴板！</span>
+  </div>
 
   <script>
     const WORDS = [
@@ -459,7 +473,7 @@ export default {
 
     function randomizeMain() {
       const prefixEl = document.getElementById("prefixText");
-      prefixEl.style.transform = "scale(0.85)";
+      prefixEl.style.transform = "scale(0.88)";
       prefixEl.style.opacity = "0.5";
       setTimeout(() => {
         prefixEl.innerText = getRandomPrefix();
@@ -488,7 +502,7 @@ export default {
 
     function showToast(msg) {
       const toast = document.getElementById("toast");
-      toast.innerText = msg;
+      document.getElementById("toastMsg").innerText = msg;
       toast.classList.add("show");
       setTimeout(() => toast.classList.remove("show"), 2000);
     }

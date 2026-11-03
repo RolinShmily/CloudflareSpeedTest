@@ -6,8 +6,8 @@
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "cf.example.com/*",
-      "zone_name": "example.com"
+      "pattern": "cf.example.com",
+      "custom_domain": true
     }
   ],
   "vars": {
