@@ -15,7 +15,7 @@
     "binary_path": "cfst",
     "ip_file": "ip.txt",
     "specified_ips": [],
-    "test_url": "https://cf.xiu2.xyz/url",
+    "test_url": "https://cf.example.com/download",
     "port": 443,
     "thread_count": 200,
     "ping_times": 4,

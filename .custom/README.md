@@ -148,7 +148,7 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "binary_path": "cfst",                     // 测速程序文件名或路径
     "ip_file": "ip.txt",                       // IP 段库文件 (IPv4: ip.txt, IPv6: ipv6.txt)
     "specified_ips": [],                       // 可选: 指定测速 IP 或 CIDR 列表 (如 ["104.16.0.0/16"])，留空使用 ip_file
-    "test_url": "https://cf.xiu2.xyz/url",     // 测速目标下载文件 URL
+    "test_url": "https://cf.example.com/download", // 自建 Worker 测速地址 (或公共地址 https://cf.xiu2.xyz/url)
     "port": 443,                               // 测速端口 (常用 443 / 80 / 8443 / 2053 等)
     "thread_count": 200,                       // 延迟测速并发线程 (-n)
     "ping_times": 4,                           // 单 IP 延迟测速次数 (-t)

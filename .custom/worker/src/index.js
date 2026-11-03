@@ -5,6 +5,48 @@
 
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // 1. 独享私有测速下载接口: /download 或 /speedtest
+    // 利用 ReadableStream 纯内存动态生成零字节流，跑满 CDN 边缘带宽，零源站负荷
+    if (url.pathname === "/download" || url.pathname === "/speedtest") {
+      // 默认 200MB (209715200 字节)，支持通过 ?bytes= 自定义下载大小
+      const bytesParam = parseInt(url.searchParams.get("bytes")) || 209715200;
+      const headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": bytesParam.toString(),
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+      };
+
+      if (request.method === "OPTIONS") {
+        return new Response(null, { headers });
+      }
+
+      if (request.method === "HEAD") {
+        return new Response(null, { status: 200, headers });
+      }
+
+      const chunkSize = 64 * 1024; // 64KB 单块
+      let sent = 0;
+      const stream = new ReadableStream({
+        pull(controller) {
+          if (sent >= bytesParam) {
+            controller.close();
+            return;
+          }
+          const remain = bytesParam - sent;
+          const current = remain < chunkSize ? remain : chunkSize;
+          controller.enqueue(new Uint8Array(current));
+          sent += current;
+        },
+      });
+
+      return new Response(stream, { status: 200, headers });
+    }
+
+    // 2. 静态优选域名生成主页
     // 默认基准域名：从环境变量或 Host 头获取
     const defaultHost = env.BASE_DOMAIN || request.headers.get("host") || "cf.269601.xyz";
 
