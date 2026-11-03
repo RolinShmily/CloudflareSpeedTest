@@ -152,7 +152,7 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "port": 443,                               // 测速端口 (常用 443 / 80 / 8443 / 2053 等)
     "thread_count": 200,                       // 延迟测速并发线程 (-n)
     "ping_times": 4,                           // 单 IP 延迟测速次数 (-t)
-    "candidate_pool_size": 15,                 // 【测速候选池深度】下载测速 IP 数量 (-dn，建议设为 target_ip_count 的 2~3 倍)
+    "candidate_pool_size": 30,                 // 【测速候选池深度】下载测速 IP 数量 (-dn，建议设为 target_ip_count 的 2~3 倍)
     "download_time": 10,                       // 下载测速时间 (-dt，秒)
     "httping": false,                          // 是否切换为 HTTPing 延迟测速模式
     "httping_code": 200,                       // HTTPing 有效响应状态码
@@ -160,8 +160,8 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "extra_args": []                           // 传递给 cfst 的额外自定义原始参数
   },
   "filter": {
-    "target_ip_count": 5,                      // 【最终 IP 池大小】最终写入 DNS 的优选 IP 数量 (Top N，如 5, 10, 20)
-    "min_qualified_ips": 3,                    // 【安全熔断阈值】合格 IP 少于该值时放弃更新，保持上一轮 DNS
+    "target_ip_count": 10,                     // 【最终 IP 池大小】最终写入 DNS 的优选 IP 数量 (Top N，如 5, 10, 20)
+    "min_qualified_ips": 5,                    // 【安全熔断阈值】合格 IP 少于该值时放弃更新，保持上一轮 DNS
     "sort_by": "speed",                        // 【优选排序偏好】"speed"(下载速度优先) / "delay"(延迟优先) / "balanced"(综合平衡)
     "min_delay_ms": 0.0,                       // 平均延迟下限 (-tll，可过滤内网或假延迟)
     "max_delay_ms": 200.0,                     // 平均延迟上限 (毫秒)
