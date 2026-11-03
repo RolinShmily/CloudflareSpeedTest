@@ -240,9 +240,16 @@ export default {
     .chip .chip-domain {
       color: #71717a;
     }
-    .chip .chip-copy-icon {
-      color: #71717a;
+    .chip .chip-copy-btn {
+      color: var(--text-muted);
       font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 0.15s ease;
+    }
+    .chip:hover .chip-copy-btn {
+      color: #ffffff;
     }
 
     /* 泛域名配置区域 */
@@ -401,12 +408,12 @@ export default {
 
       <!-- 泛域名自定义配置区域 (可切换/持久化) -->
       <div class="config-box">
-        <div class="config-header" onclick="toggleConfigArea()">
+        <div class="config-header">
           <span>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             泛域名设置
           </span>
-          <span style="font-size: 11px; color: var(--text-muted);" id="configToggleText">自定义基准域名 ⚙️</span>
+          <span style="font-size: 11px; color: var(--text-muted);" id="configToggleText">自定义基准域名</span>
         </div>
         <div class="config-body" id="configBody">
           <input type="text" id="customDomainInput" class="config-input" placeholder="输入自定义基准域名 (如 cf.example.com)" />
@@ -416,7 +423,7 @@ export default {
       </div>
 
       <div class="info-footer">
-        💡 提示：任意前缀均由 <code id="wildcardTip">*.${defaultHost}</code> 泛解析自动分配至最优 Anycast 节点群，请将复制的域名粘贴至客户端的“地址 / Server”配置中。
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>提示：任意前缀均由 <code id="wildcardTip">*.${defaultHost}</code> 泛解析自动分配至最优 Anycast 节点群，请将复制的域名粘贴至客户端的“地址 / Server”配置中。
       </div>
     </div>
   </div>
@@ -502,7 +509,7 @@ export default {
         const full = prefix + "." + currentBaseDomain;
         const chip = document.createElement("div");
         chip.className = "chip";
-        chip.innerHTML = '<span><span class="chip-prefix">' + prefix + '</span><span class="chip-domain">.' + currentBaseDomain + '</span></span><span class="chip-copy-icon">点击复制 📋</span>';
+        chip.innerHTML = '<span><span class="chip-prefix">' + prefix + '</span><span class="chip-domain">.' + currentBaseDomain + '</span></span><span class="chip-copy-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>复制</span>';
         chip.onclick = () => {
           copyText(full).then(() => showToast("已复制: " + full));
         };
