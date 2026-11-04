@@ -30,6 +30,10 @@
     "target_ip_count": 10,
     "min_qualified_ips": 5,
     "sort_by": "speed",
+    "exclude_colo": [
+      "HKG"
+    ],
+    "include_colo": [],
     "min_delay_ms": 0.0,
     "max_delay_ms": 200.0,
     "max_loss_rate": 0.05,

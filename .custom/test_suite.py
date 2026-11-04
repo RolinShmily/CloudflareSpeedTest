@@ -57,6 +57,14 @@ class TestDDNSFilterAndSync(unittest.TestCase):
             for item in selected_min:
                 self.assertGreaterEqual(item.delay_ms, 150.0)
 
+            # Test exclude_colo (e.g. exclude HKG)
+            filter_cfg_exclude = dict(filter_cfg, exclude_colo=["HKG"], sort_by="delay")
+            selected_exclude = filter_and_rank_ips(results, filter_cfg_exclude)
+            for item in selected_exclude:
+                self.assertNotEqual(item.colo.upper(), "HKG")
+            # In results: HKG is 104.27.200.3, it should not be in selected_exclude
+            self.assertNotIn("104.27.200.3", [x.ip for x in selected_exclude])
+
     def test_protection_min_qualified_ips(self):
         mock_client = MagicMock(spec=CloudflareClient)
         mock_client.verify_token.return_value = True

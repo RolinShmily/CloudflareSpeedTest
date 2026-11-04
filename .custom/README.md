@@ -163,6 +163,8 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "target_ip_count": 10,                     // 【最终 IP 池大小】最终写入 DNS 的优选 IP 数量 (Top N，如 5, 10, 20)
     "min_qualified_ips": 5,                    // 【安全熔断阈值】合格 IP 少于该值时放弃更新，保持上一轮 DNS
     "sort_by": "speed",                        // 【优选排序偏好】"speed"(下载速度优先) / "delay"(延迟优先) / "balanced"(综合平衡)
+    "exclude_colo": ["HKG"],                   // 【机房黑名单】排除指定地区三字码 (需配合 httping:true，如 ["HKG"] 避免香港晚高峰堵塞与单点依赖)
+    "include_colo": [],                        // 【机房白名单】仅保留指定机房代码 (可选，留空为不限制)
     "min_delay_ms": 0.0,                       // 平均延迟下限 (-tll，可过滤内网或假延迟)
     "max_delay_ms": 200.0,                     // 平均延迟上限 (毫秒)
     "max_loss_rate": 0.05,                     // 丢包率上限 (0.05 即 5%)

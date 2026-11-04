@@ -117,8 +117,38 @@ def filter_and_rank_ips(candidates: List[IPResult], filter_config: Dict[str, Any
     target_count = int(filter_config.get("target_ip_count", 5))
     sort_by = str(filter_config.get("sort_by", "speed")).strip().lower()
 
+    # Colo filtering (e.g. exclude_colo: ["HKG"] or include_colo: ["NRT", "SJC"])
+    exclude_colo_raw = filter_config.get("exclude_colo", [])
+    if isinstance(exclude_colo_raw, str):
+        exclude_colo = {c.strip().upper() for c in exclude_colo_raw.split(",") if c.strip()}
+    elif isinstance(exclude_colo_raw, (list, tuple, set)):
+        exclude_colo = {str(c).strip().upper() for c in exclude_colo_raw if str(c).strip()}
+    else:
+        exclude_colo = set()
+
+    include_colo_raw = filter_config.get("include_colo", [])
+    if isinstance(include_colo_raw, str):
+        include_colo = {c.strip().upper() for c in include_colo_raw.split(",") if c.strip()}
+    elif isinstance(include_colo_raw, (list, tuple, set)):
+        include_colo = {str(c).strip().upper() for c in include_colo_raw if str(c).strip()}
+    else:
+        include_colo = set()
+
+    if exclude_colo or include_colo:
+        has_colo = any(c.colo and c.colo.strip() and c.colo.strip().upper() != "N/A" for c in candidates)
+        if candidates and not has_colo:
+            logger.warning(
+                "配置了 exclude_colo / include_colo，但解析到的 IP 均无有效地区码 (N/A)！"
+                "提示: 请确保 speedtest.httping 设为 true，否则 cfst 无法获取机房地区码。"
+            )
+
     qualified: List[IPResult] = []
     for c in candidates:
+        colo_upper = c.colo.strip().upper() if c.colo else ""
+        if exclude_colo and colo_upper in exclude_colo:
+            continue
+        if include_colo and colo_upper not in include_colo:
+            continue
         if c.loss_rate > max_loss:
             continue
         if c.delay_ms < min_delay or c.delay_ms > max_delay:
@@ -127,12 +157,19 @@ def filter_and_rank_ips(candidates: List[IPResult], filter_config: Dict[str, Any
             continue
         qualified.append(c)
 
+    filter_desc = [
+        f"丢包率 <= {max_loss * 100:.1f}%",
+        f"延迟 [{min_delay:.0f} ~ {max_delay:.0f}] ms",
+        f"下载速度 >= {min_speed:.2f} MB/s",
+    ]
+    if exclude_colo:
+        filter_desc.append(f"排除机房: {','.join(sorted(exclude_colo))}")
+    if include_colo:
+        filter_desc.append(f"限定机房: {','.join(sorted(include_colo))}")
+
     logger.info(
-        "过滤条件: 丢包率 <= %.1f%%, 延迟 [%.0f ~ %.0f] ms, 下载速度 >= %.2f MB/s -> 达标 IP 数量: %d / %d",
-        max_loss * 100,
-        min_delay,
-        max_delay,
-        min_speed,
+        "过滤条件: %s -> 达标 IP 数量: %d / %d",
+        ", ".join(filter_desc),
         len(qualified),
         len(candidates),
     )
