@@ -150,9 +150,13 @@ def run_speedtest(
     if max_loss is not None:
         cmd.extend(["-tlr", str(float(max_loss))])
 
-    min_speed = filter_config.get("min_speed_mb")
-    if min_speed is not None:
-        cmd.extend(["-sl", str(float(min_speed))])
+    # Note: Do NOT pass -sl (min download speed) to cfst binary!
+    # If no IP reaches -sl, cfst empties speedSet and does not generate result.csv at all.
+    # We let filter.py handle min_speed_mb cleanly with full diagnostic visibility.
+
+    # Always enable cfst debug flag so it prints detailed diagnostics and avoids discarding
+    # all records when thresholds are close
+    cmd.append("-debug")
 
     # HTTPing mode
     if speedtest_config.get("httping", False):
@@ -168,23 +172,22 @@ def run_speedtest(
     if test_url:
         cmd.extend(["-url", test_url])
 
-    # Specific colo (supports macro-region codes like JP,SG,KR,TW,US as well as 3-letter IATA codes)
-    # When speedtest.colo is empty and httping is enabled, automatically inherit filter.include_colo
-    # so cfst pre-filters to target regions during the zero-traffic HEAD phase.
-    raw_colo = speedtest_config.get("colo", "")
-    if not raw_colo and speedtest_config.get("httping", False):
-        raw_colo = filter_config.get("include_colo", [])
-
-    expanded_colos = expand_colo_list(raw_colo)
-    if expanded_colos:
-        excluded = expand_colo_set(filter_config.get("exclude_colo", []))
-        if excluded:
-            expanded_colos = [c for c in expanded_colos if c not in excluded]
+    # Specific colo: ONLY pass -cfcolo if explicitly configured in speedtest.colo!
+    # Do NOT silently inherit filter.include_colo, because if the VPS network BGP Anycast
+    # routes to HKG or US, forcing -cfcolo NRT,SIN... causes cfst to drop 100% of IPs during ping,
+    # producing 0 results. filter.py will handle regional selection and reporting cleanly.
+    raw_colo = speedtest_config.get("colo", "").strip()
+    if raw_colo:
+        expanded_colos = expand_colo_list(raw_colo)
         if expanded_colos:
-            if "-httping" not in cmd:
-                logger.info("已指定测速地区 (colo)，自动启用 -httping 模式以使 -cfcolo 生效")
-                cmd.append("-httping")
-            cmd.extend(["-cfcolo", ",".join(expanded_colos)])
+            excluded = expand_colo_set(filter_config.get("exclude_colo", []))
+            if excluded:
+                expanded_colos = [c for c in expanded_colos if c not in excluded]
+            if expanded_colos:
+                if "-httping" not in cmd:
+                    logger.info("已显式指定测速地区 (speedtest.colo)，自动启用 -httping 模式以使 -cfcolo 生效")
+                    cmd.append("-httping")
+                cmd.extend(["-cfcolo", ",".join(expanded_colos)])
 
     # Specified IP or CIDR ranges (-ip)
     specified_ips = speedtest_config.get("specified_ips")
@@ -221,6 +224,8 @@ def run_speedtest(
         raise SpeedTestError(f"执行 CloudflareSpeedTest 发生异常: {e}")
 
     if not output_csv.exists() or output_csv.stat().st_size == 0:
+        if proc.stdout:
+            logger.error("CloudflareSpeedTest 控制台输出内容:\n%s", proc.stdout.strip())
         raise SpeedTestError(
             f"CloudflareSpeedTest 未能生成有效的结果文件: {output_csv}！\n"
             f"可能原因: 网络测速全部超时/丢包，或测速参数限制过严未能凑齐 IP。"
