@@ -137,25 +137,13 @@ def run_speedtest(
     if port:
         cmd.extend(["-tp", str(port)])
 
-    # Pass filter thresholds to cfst directly for faster test completion
-    min_delay = filter_config.get("min_delay_ms")
-    if min_delay is not None and float(min_delay) > 0:
-        cmd.extend(["-tll", str(int(min_delay))])
+    # Note: Do NOT pass -tl (max delay), -tll, -tlr (max loss), or -sl (min speed) to cfst binary!
+    # If network latency/loss/speed doesn't meet cfst's hard CLI criteria, cfst empties the IP set
+    # and aborts CSV export entirely (producing 0 results).
+    # Instead, cfst should simply measure and return the Top candidate IPs with their actual measurements,
+    # and filter.py in Python will cleanly evaluate thresholds with full safety fuses and reporting.
 
-    max_delay = filter_config.get("max_delay_ms")
-    if max_delay is not None:
-        cmd.extend(["-tl", str(int(max_delay))])
-
-    max_loss = filter_config.get("max_loss_rate")
-    if max_loss is not None:
-        cmd.extend(["-tlr", str(float(max_loss))])
-
-    # Note: Do NOT pass -sl (min download speed) to cfst binary!
-    # If no IP reaches -sl, cfst empties speedSet and does not generate result.csv at all.
-    # We let filter.py handle min_speed_mb cleanly with full diagnostic visibility.
-
-    # Always enable cfst debug flag so it prints detailed diagnostics and avoids discarding
-    # all records when thresholds are close
+    # Always enable cfst debug flag so it prints detailed diagnostics
     cmd.append("-debug")
 
     # HTTPing mode

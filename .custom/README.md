@@ -83,7 +83,7 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "exclude_colo": ["HKG", "EU"],             // 排除大区 (HK/MO/EU/US) 或三字码
     "include_colo": ["JP", "SG", "KR", "TW"],  // 限定大区 (JP/SG/KR/TW/US) 或三字码
     "min_delay_ms": 0.0,
-    "max_delay_ms": 200.0,
+    "max_delay_ms": 350.0,                     // 平均延迟上限 (HTTPing 模式包含完整 HTTPS 握手，建议 300~400ms；TCPing 可设 200ms)
     "max_loss_rate": 0.05,
     "min_speed_mb": 5.0
   },
