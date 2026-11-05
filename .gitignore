@@ -6,17 +6,20 @@ Releases
 # Python artifacts
 __pycache__/
 *.py[cod]
+.venv/
+.custom/uv-py/.venv/
 
 # Custom DDNS artifacts & secrets
 .custom/config.json
+.custom/uv-py/config.json
 .custom/*.log
 .custom/*.csv
 .custom/cfst
 .custom/CloudflareSpeedTest
 .custom/result*.csv
-cfst
-CloudflareSpeedTest
-cfst_*
+/cfst
+/CloudflareSpeedTest
+/cfst_*
 *.tar.gz
 *.zip
 使用+错误+反馈说明.txt

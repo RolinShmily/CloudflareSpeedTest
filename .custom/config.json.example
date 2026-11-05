@@ -20,8 +20,8 @@
     "thread_count": 200,
     "ping_times": 4,
     "candidate_pool_size": 30,
-    "download_time": 10,
-    "httping": false,
+    "download_time": 4,
+    "httping": true,
     "httping_code": 200,
     "colo": "",
     "extra_args": []
@@ -29,18 +29,27 @@
   "filter": {
     "target_ip_count": 10,
     "min_qualified_ips": 5,
-    "sort_by": "speed",
+    "sort_by": "delay",
+    "diversify_colo": true,
+    "max_per_colo": 2,
+    "strict_colo_cap": false,
     "exclude_colo": [
-      "HKG"
+      "HKG",
+      "EU"
     ],
-    "include_colo": [],
+    "include_colo": [
+      "JP",
+      "SG",
+      "KR",
+      "TW"
+    ],
     "min_delay_ms": 0.0,
     "max_delay_ms": 200.0,
     "max_loss_rate": 0.05,
     "min_speed_mb": 5.0
   },
   "schedule": {
-    "interval_hours": 6,
+    "interval_hours": 12,
     "random_delay_minutes": 0
   },
   "general": {

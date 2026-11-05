@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from .filter import expand_colo_list, expand_colo_set
+except (ImportError, ValueError):
+    from filter import expand_colo_list, expand_colo_set
+
 logger = logging.getLogger("cfst_ddns.speedtest")
 
 
@@ -105,7 +110,7 @@ def run_speedtest(
         cmd.extend(["-t", str(ping_times)])
 
     # Download test candidate pool count & duration
-    target_count = int(filter_config.get("target_ip_count", 5))
+    target_count = int(filter_config.get("target_ip_count", 10))
     dn = speedtest_config.get("candidate_pool_size") or speedtest_config.get("download_count")
     if dn is not None:
         dn = int(dn)
@@ -114,16 +119,16 @@ def run_speedtest(
                 "配置的候选池测速量 (-dn %d) 小于目标保留 IP 数 (target_ip_count %d)，自动上调为 %d 以确保充足优选空间",
                 dn,
                 target_count,
-                target_count * 2,
+                max(target_count * 2, 30),
             )
-            dn = target_count * 2
+            dn = max(target_count * 2, 30)
     else:
-        # Default candidate pool is twice the target count (at least 10)
-        dn = max(target_count * 2, 10)
+        # Default candidate pool is 30 (3x of default target_count 10)
+        dn = max(target_count * 3, 30)
 
     cmd.extend(["-dn", str(dn)])
 
-    dt = speedtest_config.get("download_time", 10)
+    dt = speedtest_config.get("download_time", 4)
     if dt:
         cmd.extend(["-dt", str(dt)])
 
@@ -163,10 +168,23 @@ def run_speedtest(
     if test_url:
         cmd.extend(["-url", test_url])
 
-    # Specific colo
-    colo = speedtest_config.get("colo", "").strip()
-    if colo:
-        cmd.extend(["-cfcolo", colo])
+    # Specific colo (supports macro-region codes like JP,SG,KR,TW,US as well as 3-letter IATA codes)
+    # When speedtest.colo is empty and httping is enabled, automatically inherit filter.include_colo
+    # so cfst pre-filters to target regions during the zero-traffic HEAD phase.
+    raw_colo = speedtest_config.get("colo", "")
+    if not raw_colo and speedtest_config.get("httping", False):
+        raw_colo = filter_config.get("include_colo", [])
+
+    expanded_colos = expand_colo_list(raw_colo)
+    if expanded_colos:
+        excluded = expand_colo_set(filter_config.get("exclude_colo", []))
+        if excluded:
+            expanded_colos = [c for c in expanded_colos if c not in excluded]
+        if expanded_colos:
+            if "-httping" not in cmd:
+                logger.info("已指定测速地区 (colo)，自动启用 -httping 模式以使 -cfcolo 生效")
+                cmd.append("-httping")
+            cmd.extend(["-cfcolo", ",".join(expanded_colos)])
 
     # Specified IP or CIDR ranges (-ip)
     specified_ips = speedtest_config.get("specified_ips")

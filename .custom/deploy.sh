@@ -106,7 +106,14 @@ elif [ -f "${ROOT_DIR}/CloudflareSpeedTest" ]; then
     chmod +x "${ROOT_DIR}/CloudflareSpeedTest"
 fi
 
-chmod +x "${SCRIPT_DIR}/main.py"
+chmod +x "${SCRIPT_DIR}/uv-py/src/cfst_ddns/main.py"
+
+if command -v uv &> /dev/null; then
+    echo "[✓] 检测到 uv 环境: $(uv --version)"
+    RUN_CMD="$(command -v uv) run --project ${SCRIPT_DIR}/uv-py cfst-ddns"
+else
+    RUN_CMD="$(command -v python3) ${SCRIPT_DIR}/uv-py/src/cfst_ddns/main.py"
+fi
 
 # 3. 检查配置文件
 CONFIG_FILE="${SCRIPT_DIR}/config.json"
@@ -164,7 +171,7 @@ Wants=network-online.target
 Type=oneshot
 User=root
 WorkingDirectory=${ROOT_DIR}
-ExecStart=$(command -v python3) ${SCRIPT_DIR}/main.py
+ExecStart=${RUN_CMD}
 StandardOutput=journal
 StandardError=journal
 
@@ -172,11 +179,11 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    # 读取 config.json 中的运行间隔设置 (若未配置默认 6 小时)
-    INTERVAL_HOURS=6
+    # 读取 config.json 中的运行间隔设置 (若未配置默认 12 小时)
+    INTERVAL_HOURS=12
     RANDOM_MIN=0
     if [ -f "${CONFIG_FILE}" ]; then
-        INTERVAL_HOURS=$(python3 -c "import json; cfg=json.load(open('${CONFIG_FILE}')); print(cfg.get('schedule', {}).get('interval_hours', 6))" 2>/dev/null || echo 6)
+        INTERVAL_HOURS=$(python3 -c "import json; cfg=json.load(open('${CONFIG_FILE}')); print(cfg.get('schedule', {}).get('interval_hours', 12))" 2>/dev/null || echo 12)
         RANDOM_MIN=$(python3 -c "import json; cfg=json.load(open('${CONFIG_FILE}')); print(cfg.get('schedule', {}).get('random_delay_minutes', 0))" 2>/dev/null || echo 0)
     fi
 
@@ -218,10 +225,10 @@ else
     echo "1. 编辑配置文件并填入 Cloudflare API Token:"
     echo "   nano ${CONFIG_FILE}"
     echo "2. 校验配置连通性与权限:"
-    echo "   python3 ${SCRIPT_DIR}/main.py --verify-only"
+    echo "   ${RUN_CMD} --verify-only"
     echo "3. 试运行 (测速并模拟 DNS 变更，不实际修改):"
-    echo "   python3 ${SCRIPT_DIR}/main.py --dry-run"
-    echo "4. 一键安装 systemd 6 小时自动运行定时器:"
+    echo "   ${RUN_CMD} --dry-run"
+    echo "4. 一键安装 systemd 12 小时自动运行定时器:"
     echo "   sudo bash ${SCRIPT_DIR}/deploy.sh --install-systemd"
     echo "5. 卸载 systemd 定时器与服务:"
     echo "   sudo bash ${SCRIPT_DIR}/deploy.sh --uninstall-systemd"

@@ -11,12 +11,15 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-# Ensure local imports work regardless of invocation directory
-current_dir = Path(__file__).resolve().parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
-if str(current_dir.parent) not in sys.path:
-    sys.path.insert(0, str(current_dir.parent))
+# Package & directory layout:
+# .custom/uv-py/src/cfst_ddns/main.py
+package_dir = Path(__file__).resolve().parent
+src_dir = package_dir.parent
+uv_dir = src_dir.parent
+custom_dir = uv_dir.parent
+
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 try:
     from .cloudflare import CloudflareAPIError, CloudflareClient
@@ -24,10 +27,10 @@ try:
     from .speedtest import SpeedTestError, run_speedtest
     from .sync import DNSUpdater
 except (ImportError, ValueError):
-    from cloudflare import CloudflareAPIError, CloudflareClient
-    from filter import filter_and_rank_ips, parse_csv
-    from speedtest import SpeedTestError, run_speedtest
-    from sync import DNSUpdater
+    from cfst_ddns.cloudflare import CloudflareAPIError, CloudflareClient
+    from cfst_ddns.filter import filter_and_rank_ips, parse_csv
+    from cfst_ddns.speedtest import SpeedTestError, run_speedtest
+    from cfst_ddns.sync import DNSUpdater
 
 logger = logging.getLogger("cfst_ddns")
 
@@ -55,7 +58,7 @@ def setup_logging(general_config: Dict[str, Any], verbose: bool = False) -> None
     if log_file:
         log_path = Path(log_file)
         if not log_path.is_absolute():
-            log_path = current_dir / log_path
+            log_path = custom_dir / log_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
         file_handler.setFormatter(formatter)
@@ -68,13 +71,17 @@ def setup_logging(general_config: Dict[str, Any], verbose: bool = False) -> None
 def load_config(config_path: Path) -> Dict[str, Any]:
     """Load and validate JSON configuration with environment variable fallbacks."""
     if not config_path.exists():
-        example_path = config_path.parent / "config.json.example"
-        raise FileNotFoundError(
-            f"配置文件不存在: {config_path}\n"
-            f"请复制示例文件创建配置文件:\n"
-            f"  cp {example_path} {config_path}\n"
-            f"并填写其中的 Cloudflare API Token 和解析域名信息。"
-        )
+        alt_path = uv_dir / "config.json"
+        if config_path == custom_dir / "config.json" and alt_path.exists():
+            config_path = alt_path
+        else:
+            example_path = custom_dir / "config.json.example"
+            raise FileNotFoundError(
+                f"配置文件不存在: {config_path}\n"
+                f"请复制示例文件创建配置文件:\n"
+                f"  cp {example_path} {config_path}\n"
+                f"并填写其中的 Cloudflare API Token 和解析域名信息。"
+            )
 
     try:
         with open(config_path, mode="r", encoding="utf-8") as f:
@@ -131,14 +138,21 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
                 )
                 logger.info("  域名 [%s] 共有 %d 条解析:", rec_name, len(records))
                 for r in records:
-                    logger.info("    - %s -> %s (ID: %s, TTL: %s, Proxied: %s)", r["name"], r["content"], r["id"], r["ttl"], r["proxied"])
+                    logger.info(
+                        "    - %s -> %s (ID: %s, TTL: %s, Proxied: %s)",
+                        r["name"],
+                        r["content"],
+                        r["id"],
+                        r["ttl"],
+                        r["proxied"],
+                    )
             return 0
         except Exception as e:
             logger.error("诊断发现问题: %s", e)
             return 1
 
     # Determine CSV file path
-    default_csv = current_dir / "result.csv"
+    default_csv = custom_dir / "result.csv"
     csv_file = args.csv or default_csv
 
     # Run SpeedTest or skip
@@ -148,7 +162,7 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
                 speedtest_config=speedtest_config,
                 filter_config=filter_config,
                 output_csv=csv_file,
-                base_dir=current_dir,
+                base_dir=custom_dir,
             )
         except SpeedTestError as e:
             logger.error("[测速失败] %s", e)
@@ -191,7 +205,7 @@ def main() -> int:
         "-c",
         "--config",
         type=Path,
-        default=current_dir / "config.json",
+        default=custom_dir / "config.json",
         help="配置文件路径 (默认: .custom/config.json)",
     )
     parser.add_argument(
@@ -243,7 +257,7 @@ def main() -> int:
 
     # Daemon loop mode
     schedule_config = config.get("schedule", {})
-    interval_hours = float(schedule_config.get("interval_hours", 6.0))
+    interval_hours = float(schedule_config.get("interval_hours", 12.0))
     interval_seconds = max(60.0, interval_hours * 3600.0)
 
     logger.info("进入守护进程常驻模式，执行间隔: %.1f 小时 (%.0f 秒)", interval_hours, interval_seconds)

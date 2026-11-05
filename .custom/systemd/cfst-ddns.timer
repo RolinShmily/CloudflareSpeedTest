@@ -1,12 +1,12 @@
 [Unit]
-Description=Run CloudflareSpeedTest DDNS update every 6 hours
+Description=Run CloudflareSpeedTest DDNS update every 12 hours
 Documentation=https://github.com/XIU2/CloudflareSpeedTest
 
 [Timer]
 # 开机后 2 分钟首次运行
 OnBootSec=2min
-# 每次运行后间隔 6 小时再次执行
-OnUnitActiveSec=6h
+# 每次运行后间隔 12 小时再次执行
+OnUnitActiveSec=12h
 # 错过执行时间点时在系统唤醒后补跑
 Persistent=true
 

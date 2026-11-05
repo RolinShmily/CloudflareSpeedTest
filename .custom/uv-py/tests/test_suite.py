@@ -1,13 +1,18 @@
-"""Unit tests for .custom ddns logic."""
+"""Unit tests for cfst_ddns logic."""
 
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
-from cloudflare import CloudflareClient
-from filter import IPResult, filter_and_rank_ips, parse_csv
-from sync import DNSUpdater
+src_dir = Path(__file__).resolve().parent.parent / "src"
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
+
+from cfst_ddns.cloudflare import CloudflareClient
+from cfst_ddns.filter import IPResult, expand_colo_set, filter_and_rank_ips, parse_csv
+from cfst_ddns.sync import DNSUpdater
 
 
 class TestDDNSFilterAndSync(unittest.TestCase):
@@ -64,6 +69,82 @@ class TestDDNSFilterAndSync(unittest.TestCase):
                 self.assertNotEqual(item.colo.upper(), "HKG")
             # In results: HKG is 104.27.200.3, it should not be in selected_exclude
             self.assertNotIn("104.27.200.3", [x.ip for x in selected_exclude])
+
+    def test_region_diversification_and_elastic_fallback(self):
+        """Test 100-to-10 selection with macro-region filtering, round-robin cap, and elastic fallback."""
+        # Verify macro-region expansion (JP, SG, KR, TW without US/EU/HK)
+        allowed = expand_colo_set(["JP", "SG", "KR", "TW"])
+        self.assertIn("NRT", allowed)
+        self.assertIn("SIN", allowed)
+        self.assertIn("ICN", allowed)
+        self.assertIn("TPE", allowed)
+        self.assertNotIn("SJC", allowed)
+        self.assertNotIn("FRA", allowed)
+        self.assertNotIn("HKG", allowed)
+
+        # Simulate a candidate pool heavily dominated by NRT (40 IPs), plus KIX, SIN, ICN, TPE, KHH, and excluded LAX/FRA/HKG
+        candidates = []
+        for i in range(1, 41):
+            # NRT has lowest delay (40ms~44ms)
+            candidates.append(IPResult(f"104.16.1.{i}", 4, 4, 0.0, 40.0 + i * 0.1, 30.0, "NRT"))
+        for i in range(1, 5):
+            candidates.append(IPResult(f"104.16.2.{i}", 4, 4, 0.0, 48.0 + i, 25.0, "KIX"))
+        for i in range(1, 4):
+            candidates.append(IPResult(f"104.16.3.{i}", 4, 4, 0.0, 65.0 + i, 20.0, "SIN"))
+        for i in range(1, 4):
+            candidates.append(IPResult(f"104.16.4.{i}", 4, 4, 0.0, 55.0 + i, 22.0, "ICN"))
+        for i in range(1, 4):
+            candidates.append(IPResult(f"104.16.5.{i}", 4, 4, 0.0, 60.0 + i, 18.0, "TPE"))
+        # US (LAX), Western Europe (FRA) and HKG should be excluded by include_colo/exclude_colo
+        candidates.append(IPResult("104.16.6.1", 4, 4, 0.0, 35.0, 50.0, "LAX"))
+        candidates.append(IPResult("104.16.7.1", 4, 4, 0.0, 30.0, 60.0, "FRA"))
+        candidates.append(IPResult("104.16.8.1", 4, 4, 0.0, 25.0, 65.0, "HKG"))
+
+        filter_cfg = {
+            "target_ip_count": 10,
+            "min_qualified_ips": 5,
+            "sort_by": "delay",
+            "diversify_colo": True,
+            "max_per_colo": 2,
+            "strict_colo_cap": False,
+            "include_colo": ["JP", "SG", "KR", "TW"],
+            "exclude_colo": ["HKG", "EU"],
+            "max_delay_ms": 200.0,
+            "max_loss_rate": 0.05,
+            "min_speed_mb": 5.0,
+        }
+
+        selected = filter_and_rank_ips(candidates, filter_cfg)
+        self.assertEqual(len(selected), 10)
+        selected_colos = [x.colo for x in selected]
+
+        # LAX, FRA and HKG must never appear
+        self.assertNotIn("LAX", selected_colos)
+        self.assertNotIn("FRA", selected_colos)
+        self.assertNotIn("HKG", selected_colos)
+
+        # All 5 Asian colos (NRT, KIX, SIN, ICN, TPE) get 2 IPs each = 10 IPs total!
+        for expected_colo in ("NRT", "KIX", "SIN", "ICN", "TPE"):
+            self.assertEqual(selected_colos.count(expected_colo), 2)
+
+        # Now test elastic fallback when only 2 colos (NRT: 10, SIN: 10) exist in the candidate pool
+        scarce_candidates = [
+            IPResult(f"104.18.1.{i}", 4, 4, 0.0, 45.0 + i, 25.0, "NRT") for i in range(1, 11)
+        ] + [
+            IPResult(f"104.18.2.{i}", 4, 4, 0.0, 65.0 + i, 20.0, "SIN") for i in range(1, 11)
+        ]
+
+        # Elastic fallback (strict_colo_cap=False): fills to 10 evenly (5 NRT + 5 SIN)
+        selected_elastic = filter_and_rank_ips(scarce_candidates, filter_cfg)
+        self.assertEqual(len(selected_elastic), 10)
+        elastic_colos = [x.colo for x in selected_elastic]
+        self.assertEqual(elastic_colos.count("NRT"), 5)
+        self.assertEqual(elastic_colos.count("SIN"), 5)
+
+        # Strict cap (strict_colo_cap=True): strictly stops at 2 NRT + 2 SIN = 4 IPs
+        strict_cfg = dict(filter_cfg, strict_colo_cap=True)
+        selected_strict = filter_and_rank_ips(scarce_candidates, strict_cfg)
+        self.assertEqual(len(selected_strict), 4)
 
     def test_protection_min_qualified_ips(self):
         mock_client = MagicMock(spec=CloudflareClient)
