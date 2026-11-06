@@ -137,17 +137,12 @@ def run_speedtest(
     if port:
         cmd.extend(["-tp", str(port)])
 
-    # Note: Do NOT pass -tl (max delay), -tll, -tlr (max loss), or -sl (min speed) to cfst binary!
-    # If network latency/loss/speed doesn't meet cfst's hard CLI criteria, cfst empties the IP set
-    # and aborts CSV export entirely (producing 0 results).
-    # Instead, cfst should simply measure and return the Top candidate IPs with their actual measurements,
-    # and filter.py in Python will cleanly evaluate thresholds with full safety fuses and reporting.
-
-    # Always enable cfst debug flag so it prints detailed diagnostics
+    # Always enable cfst debug flag so it prints detailed diagnostics and avoids discarding
+    # all records when thresholds are close
     cmd.append("-debug")
 
-    # HTTPing mode
-    if speedtest_config.get("httping", False):
+    # HTTPing mode (default True for accurate colo resolution and TLS RTT)
+    if speedtest_config.get("httping", True):
         cmd.append("-httping")
 
     # HTTPing valid response code
@@ -160,22 +155,61 @@ def run_speedtest(
     if test_url:
         cmd.extend(["-url", test_url])
 
-    # Specific colo: ONLY pass -cfcolo if explicitly configured in speedtest.colo!
-    # Do NOT silently inherit filter.include_colo, because if the VPS network BGP Anycast
-    # routes to HKG or US, forcing -cfcolo NRT,SIN... causes cfst to drop 100% of IPs during ping,
-    # producing 0 results. filter.py will handle regional selection and reporting cleanly.
-    raw_colo = speedtest_config.get("colo", "").strip()
-    if raw_colo:
-        expanded_colos = expand_colo_list(raw_colo)
+    # Pre-filtering: Latency limits (-tl, -tll) & Loss limit (-tlr)
+    # Pre-filtering high-latency or lossy nodes in the ping phase ensures download testing
+    # slots are not wasted on unviable IPs.
+    max_delay = filter_config.get("max_delay_ms")
+    if max_delay is not None and float(max_delay) > 0:
+        cmd.extend(["-tl", str(int(float(max_delay)))])
+
+    min_delay = filter_config.get("min_delay_ms")
+    if min_delay is not None and float(min_delay) > 0:
+        cmd.extend(["-tll", str(int(float(min_delay)))])
+
+    max_loss = filter_config.get("max_loss_rate")
+    if max_loss is not None and float(max_loss) > 0:
+        cmd.extend(["-tlr", str(float(max_loss))])
+
+    # Download speed lower limit (-sl):
+    # When -sl is passed, cfst continues download-testing candidate IPs in the queue until it
+    # collects -dn IPs meeting this speed threshold, rather than stopping blindly at the first
+    # few IPs and leaving the rest with speed 0.00!
+    # With -debug enabled, if no candidate meets -sl, cfst will gracefully output all tested
+    # data instead of an empty CSV.
+    min_speed = speedtest_config.get("min_speed")
+    if min_speed is None:
+        min_speed = filter_config.get("min_speed_mb")
+    if min_speed is not None and float(min_speed) > 0:
+        cmd.extend(["-sl", str(float(min_speed))])
+        logger.info("测速阶段启用下载测速下限 (-sl %.2f MB/s)", float(min_speed))
+
+    # Specific colo (-cfcolo):
+    # 1) If speedtest.colo is explicitly set to a non-empty string, expand and use it.
+    #    (If set to 'NONE' or '*', colo pre-filtering is disabled).
+    # 2) If speedtest.colo is empty/omitted, inherit from filter.include_colo (minus exclude_colo),
+    #    ensuring download testing slots are reserved for target regions instead of being monopolized
+    #    by a single local Anycast PoP (e.g. HKG or US).
+    raw_colo = speedtest_config.get("colo", "")
+    colo_tokens = None
+    if isinstance(raw_colo, str) and raw_colo.strip():
+        cleaned = raw_colo.strip()
+        if cleaned.upper() not in ("NONE", "*", "ALL", "FALSE", "0"):
+            colo_tokens = cleaned
+    elif not raw_colo:
+        colo_tokens = filter_config.get("include_colo", [])
+
+    if colo_tokens:
+        expanded_colos = expand_colo_list(colo_tokens)
         if expanded_colos:
             excluded = expand_colo_set(filter_config.get("exclude_colo", []))
             if excluded:
                 expanded_colos = [c for c in expanded_colos if c not in excluded]
             if expanded_colos:
                 if "-httping" not in cmd:
-                    logger.info("已显式指定测速地区 (speedtest.colo)，自动启用 -httping 模式以使 -cfcolo 生效")
+                    logger.info("已指定测速地区，自动启用 -httping 模式以支持地区码识别 (-cfcolo)")
                     cmd.append("-httping")
                 cmd.extend(["-cfcolo", ",".join(expanded_colos)])
+                logger.info("测速阶段启用初筛锁区 (-cfcolo %s)", ",".join(expanded_colos[:8]) + ("..." if len(expanded_colos) > 8 else ""))
 
     # Specified IP or CIDR ranges (-ip)
     specified_ips = speedtest_config.get("specified_ips")
@@ -214,9 +248,17 @@ def run_speedtest(
     if not output_csv.exists() or output_csv.stat().st_size == 0:
         if proc.stdout:
             logger.error("CloudflareSpeedTest 控制台输出内容:\n%s", proc.stdout.strip())
+        colo_hint = ""
+        if "-cfcolo" in cmd:
+            colo_hint = (
+                "\n【排查诊断提示】检测到开启了 -cfcolo 地区初筛。\n"
+                "若当前网络（如境内单线宽带或境外单线 VPS）的所有 Anycast 路由均收敛到其他未包含的机房，\n"
+                "会导致第一阶段所有 IP 被剔除。若遇到此情况，可将 speedtest.colo 显式设为 'NONE'，\n"
+                "或在 include_colo 中加入当前运营商实际直连机房（如 HKG、SJC 等）。"
+            )
         raise SpeedTestError(
             f"CloudflareSpeedTest 未能生成有效的结果文件: {output_csv}！\n"
-            f"可能原因: 网络测速全部超时/丢包，或测速参数限制过严未能凑齐 IP。"
+            f"可能原因: 网络测速全部超时/丢包，或测速参数（延迟/丢包/机房）限制过严未能凑齐 IP。{colo_hint}"
         )
 
     logger.info("CloudflareSpeedTest 测速完成，结果写入: %s", output_csv)

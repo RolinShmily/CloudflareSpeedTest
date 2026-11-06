@@ -118,6 +118,8 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
     try:
         client = CloudflareClient(
             api_token=cf_config.get("api_token", ""),
+            timeout=int(cf_config.get("timeout", 15)),
+            proxy=cf_config.get("proxy", "").strip() or None,
         )
         updater = DNSUpdater(client, cf_config, filter_config)
     except Exception as e:

@@ -34,11 +34,17 @@ class CloudflareClient:
 
     BASE_URL = "https://api.cloudflare.com/client/v4"
 
-    def __init__(self, api_token: str, timeout: int = 30):
+    def __init__(self, api_token: str, timeout: int = 15, proxy: Optional[str] = None):
         if not api_token or api_token == "YOUR_CLOUDFLARE_API_TOKEN":
             raise CloudflareAuthError("Cloudflare API Token 未配置或仍为占位符，请在 config.json 中配置有效的 api_token。")
         self.api_token = api_token.strip()
         self.timeout = timeout
+        self.proxy = proxy.strip() if proxy else None
+
+        handlers: List[urllib.request.BaseHandler] = []
+        if self.proxy:
+            handlers.append(urllib.request.ProxyHandler({"http": self.proxy, "https": self.proxy}))
+        self.opener = urllib.request.build_opener(*handlers)
 
     def _request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send an HTTP request to Cloudflare API v4."""
@@ -60,7 +66,7 @@ class CloudflareClient:
         req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
 
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with self.opener.open(req, timeout=self.timeout) as resp:
                 resp_body = resp.read().decode("utf-8")
                 return json.loads(resp_body)
         except urllib.error.HTTPError as e:

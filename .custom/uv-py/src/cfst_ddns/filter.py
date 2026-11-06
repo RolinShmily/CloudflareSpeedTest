@@ -52,6 +52,19 @@ def get_colo_region(colo: str) -> str:
     return COLO_TO_REGION.get(colo_upper, colo_upper)
 
 
+def get_ip_subnet(ip_str: str) -> str:
+    """Return normalized /24 network address for IPv4 or /64 network address for IPv6."""
+    try:
+        addr = ipaddress.ip_address(ip_str.strip())
+        if isinstance(addr, ipaddress.IPv4Address):
+            return str(ipaddress.ip_network(f"{addr}/24", strict=False).network_address)
+        elif isinstance(addr, ipaddress.IPv6Address):
+            return str(ipaddress.ip_network(f"{addr}/64", strict=False).network_address)
+        return ip_str
+    except ValueError:
+        return ip_str
+
+
 def _parse_raw_colo_tokens(raw: Union[str, Iterable[Any], None]) -> List[str]:
     """Parse raw config value (comma-separated string or iterable) into normalized tokens."""
     if not raw:
@@ -249,10 +262,16 @@ def filter_and_rank_ips(candidates: List[IPResult], filter_config: Dict[str, Any
     # Regional diversification controls:
     # - diversify_colo: whether to select across regions in round-robin order (default True)
     # - max_per_colo: max IPs per 3-letter colo in primary pass (default 2; <=0 means unlimited round-robin)
+    # - max_per_region: max IPs per macro-region in primary pass (default 0; <=0 means unlimited)
+    # - max_per_subnet: max IPs per /24 (IPv4) or /64 (IPv6) subnet (default 0; <=0 means unlimited)
     # - strict_colo_cap: if False (default), elastically fill up to target_count via round-robin when regions are scarce
+    # - strict_subnet_cap: if False (default), elastically relax subnet limits when unique subnets are scarce
     diversify_colo = bool(filter_config.get("diversify_colo", True))
     max_per_colo = int(filter_config.get("max_per_colo", 2))
+    max_per_region = int(filter_config.get("max_per_region", 0))
+    max_per_subnet = int(filter_config.get("max_per_subnet", 0))
     strict_colo_cap = bool(filter_config.get("strict_colo_cap", False))
+    strict_subnet_cap = bool(filter_config.get("strict_subnet_cap", False))
 
     # Colo filtering: supports both macro-regions (JP, SG, KR, TW, US, HK, EU) and 3-letter IATA codes
     exclude_colo_raw = filter_config.get("exclude_colo", [])
@@ -303,22 +322,110 @@ def filter_and_rank_ips(candidates: List[IPResult], filter_config: Dict[str, Any
         len(candidates),
     )
 
-    # Sort criteria within each region (or globally if diversify_colo is False)
-    if sort_by == "delay":
-        logger.info("排序偏好: 地区打散 + 延迟优先 (同地区内最低延迟 -> 最高速度 -> 最低丢包)")
-        qualified.sort(key=lambda x: (x.delay_ms, -x.download_speed_mb, x.loss_rate))
-    elif sort_by in ("balanced", "colo", "region"):
-        logger.info("排序偏好: 地区优先打散 + 同地区综合平衡评分")
-        qualified.sort(key=lambda x: (-(x.download_speed_mb / max(1.0, x.delay_ms)), x.delay_ms, x.loss_rate))
-    else:  # default "speed"
-        logger.info("排序偏好: 地区打散 + 下载速度优先 (同地区内最高速度 -> 最低延迟 -> 最低丢包)")
-        qualified.sort(key=lambda x: (-x.download_speed_mb, x.delay_ms, x.loss_rate))
+    # Candidate pool diagnostic overview
+    colo_counter: Dict[str, int] = {}
+    delays = [c.delay_ms for c in candidates]
+    speeds = [c.download_speed_mb for c in candidates]
+    for c in candidates:
+        ck = c.colo.strip().upper() if c.colo and c.colo.strip() else "N/A"
+        colo_counter[ck] = colo_counter.get(ck, 0) + 1
+
+    sorted_colos = sorted(colo_counter.items(), key=lambda x: -x[1])
+    colo_summary = ", ".join(f"{k}:{v}" for k, v in sorted_colos[:8])
+    min_cand_delay = min(delays) if delays else 0.0
+    max_cand_delay = max(delays) if delays else 0.0
+    min_cand_speed = min(speeds) if speeds else 0.0
+    max_cand_speed = max(speeds) if speeds else 0.0
+
+    logger.info(
+        "候选池原始分布 (共 %d 个): 机房 Top=[%s], 延迟范围=[%.1f ~ %.1f] ms, 速度范围=[%.2f ~ %.2f] MB/s",
+        len(candidates),
+        colo_summary or "无",
+        min_cand_delay,
+        max_cand_delay,
+        min_cand_speed,
+        max_cand_speed,
+    )
 
     if not qualified:
+        fail_colo = 0
+        fail_delay = 0
+        fail_speed = 0
+        fail_loss = 0
+        for c in candidates:
+            ck = c.colo.strip().upper() if c.colo else ""
+            if (exclude_colo and ck in exclude_colo) or (include_colo and ck not in include_colo):
+                fail_colo += 1
+            elif c.loss_rate > max_loss:
+                fail_loss += 1
+            elif c.delay_ms < min_delay or c.delay_ms > max_delay:
+                fail_delay += 1
+            elif c.download_speed_mb < min_speed:
+                fail_speed += 1
+
+        reasons = []
+        if fail_colo > 0:
+            reasons.append(f"机房不符限定 (include={list(include_tokens)} / exclude={list(exclude_tokens)}): {fail_colo} 个 (候选机房主要为: {colo_summary})")
+        if fail_delay > 0:
+            reasons.append(f"延迟超标: {fail_delay} 个 (候选最低延迟为 {min_cand_delay:.1f}ms, 但设定上限为 {max_delay:.1f}ms)")
+        if fail_speed > 0:
+            reasons.append(f"速度未达标: {fail_speed} 个 (候选最高速度为 {max_cand_speed:.2f}MB/s, 设定下限为 {min_speed:.2f}MB/s)")
+        if fail_loss > 0:
+            reasons.append(f"丢包率超标: {fail_loss} 个")
+
+        logger.warning("未找到达标 IP！原因诊断分析:\n  * " + "\n  * ".join(reasons))
+        if fail_delay > 0 and min_cand_delay > max_delay:
+            logger.warning(
+                "【建议】检测到最低延迟 (%.1f ms) 高于设定上限 (%.1f ms)！"
+                "若使用 HTTPing 模式，因包含完整 HTTPS 握手，建议将 config.json 中的 max_delay_ms 调至 %.0f ms 以上。",
+                min_cand_delay,
+                max_delay,
+                min_cand_delay + 50.0,
+            )
+        if fail_colo == len(candidates):
+            logger.warning(
+                "【建议】检测到所有候选 IP 的物理机房 (%s) 均不在限定列表中！"
+                "这是 BGP Anycast 物理路由收敛导致的。建议在 config.json 的 include_colo 中加入当前 VPS 实际路由的机房（如 HKG 或 US）。",
+                colo_summary,
+            )
         return []
 
+    # Multi-tier sorting: 0% packet loss (Tier 0) > <=2% loss (Tier 1) > >2% loss (Tier 2)
+    def sort_key(item: IPResult) -> Tuple[Any, ...]:
+        loss_tier = 0 if item.loss_rate == 0.0 else (1 if item.loss_rate <= 0.02 else 2)
+        if sort_by == "delay":
+            return (loss_tier, item.delay_ms, -item.download_speed_mb, item.loss_rate)
+        elif sort_by in ("balanced", "colo", "region"):
+            score = item.download_speed_mb / max(1.0, item.delay_ms)
+            return (loss_tier, -score, item.delay_ms, item.loss_rate)
+        else:  # default "speed"
+            return (loss_tier, -item.download_speed_mb, item.delay_ms, item.loss_rate)
+
+    if sort_by == "delay":
+        logger.info("排序偏好: 0%%丢包优先 + 延迟优先 (0%%丢包梯队 -> 最低延迟 -> 最高速度)")
+    elif sort_by in ("balanced", "colo", "region"):
+        logger.info("排序偏好: 0%%丢包优先 + 综合平衡评分 (0%%丢包梯队 -> 最高速度/延迟比)")
+    else:  # default "speed"
+        logger.info("排序偏好: 0%%丢包优先 + 下载速度优先 (0%%丢包梯队 -> 最高速度 -> 最低延迟)")
+    qualified.sort(key=sort_key)
+
     if not diversify_colo:
-        selected = qualified[:target_count]
+        selected = []
+        subnet_counts: Dict[str, int] = {}
+        for item in qualified:
+            sub = get_ip_subnet(item.ip)
+            if max_per_subnet > 0 and subnet_counts.get(sub, 0) >= max_per_subnet:
+                continue
+            selected.append(item)
+            subnet_counts[sub] = subnet_counts.get(sub, 0) + 1
+            if len(selected) >= target_count:
+                break
+        if len(selected) < target_count and not strict_subnet_cap and max_per_subnet > 0:
+            for item in qualified:
+                if item not in selected:
+                    selected.append(item)
+                    if len(selected) >= target_count:
+                        break
     else:
         # Group qualified IPs by normalized colo code
         colo_buckets: Dict[str, List[IPResult]] = {}
@@ -334,50 +441,105 @@ def filter_and_rank_ips(candidates: List[IPResult], filter_config: Dict[str, Any
         logger.info("候选池达标地区分布 (%d 个机房): %s", len(colo_order), dist_summary)
 
         selected: List[IPResult] = []
+        selected_ips: Set[str] = set()
+        colo_counts: Dict[str, int] = {}
+        region_counts: Dict[str, int] = {}
+        subnet_counts: Dict[str, int] = {}
+
         max_bucket_size = max(len(b) for b in colo_buckets.values())
         primary_rounds = max_per_colo if max_per_colo > 0 else max_bucket_size
 
-        # Pass 1: Round-robin across colos up to max_per_colo
-        for round_idx in range(min(primary_rounds, max_bucket_size)):
+        # Pass 1: Round-robin across colos up to max_per_colo and max_per_region, respecting max_per_subnet
+        for _ in range(primary_rounds):
             for colo_key in colo_order:
+                if max_per_colo > 0 and colo_counts.get(colo_key, 0) >= max_per_colo:
+                    continue
+                region_key = get_colo_region(colo_key)
+                if max_per_region > 0 and region_counts.get(region_key, 0) >= max_per_region:
+                    continue
+
                 bucket = colo_buckets[colo_key]
-                if round_idx < len(bucket):
-                    selected.append(bucket[round_idx])
-                    if len(selected) >= target_count:
-                        break
+                for candidate in bucket:
+                    if candidate.ip in selected_ips:
+                        continue
+                    sub = get_ip_subnet(candidate.ip)
+                    if max_per_subnet > 0 and subnet_counts.get(sub, 0) >= max_per_subnet:
+                        continue
+                    selected.append(candidate)
+                    selected_ips.add(candidate.ip)
+                    colo_counts[colo_key] = colo_counts.get(colo_key, 0) + 1
+                    region_counts[region_key] = region_counts.get(region_key, 0) + 1
+                    subnet_counts[sub] = subnet_counts.get(sub, 0) + 1
+                    break
+                if len(selected) >= target_count:
+                    break
             if len(selected) >= target_count:
                 break
 
-        # Pass 2: Elastic fallback (continue round-robin if regions were too few to reach target_count)
-        if len(selected) < target_count and not strict_colo_cap and max_per_colo > 0 and max_bucket_size > primary_rounds:
+        # Pass 2: Elastic fallback (relax colo & region limits, maintain subnet diversity if possible)
+        if len(selected) < target_count and not strict_colo_cap:
             logger.info(
-                "按单机房上限 (%d 个) 轮询抽取了 %d 个 IP，尚未凑满目标数 %d，启动跨地区轮询弹性补齐...",
-                max_per_colo,
+                "初筛抽取 %d 个 IP，尚未凑满目标数 %d，启动跨地区轮询弹性补齐...",
                 len(selected),
                 target_count,
             )
-            for round_idx in range(primary_rounds, max_bucket_size):
+            for _ in range(max_bucket_size):
                 for colo_key in colo_order:
                     bucket = colo_buckets[colo_key]
-                    if round_idx < len(bucket):
-                        selected.append(bucket[round_idx])
-                        if len(selected) >= target_count:
-                            break
+                    for candidate in bucket:
+                        if candidate.ip in selected_ips:
+                            continue
+                        sub = get_ip_subnet(candidate.ip)
+                        if max_per_subnet > 0 and subnet_counts.get(sub, 0) >= max_per_subnet:
+                            continue
+                        selected.append(candidate)
+                        selected_ips.add(candidate.ip)
+                        subnet_counts[sub] = subnet_counts.get(sub, 0) + 1
+                        break
+                    if len(selected) >= target_count:
+                        break
                 if len(selected) >= target_count:
                     break
 
-    # Summarize final selected colos
+        # Pass 3: Final fallback (relax subnet limit if candidates in unique subnets were exhausted)
+        if len(selected) < target_count and not strict_subnet_cap and max_per_subnet > 0:
+            logger.info("可用独立子网耗尽，放宽同 C 段限制以凑满目标数...")
+            for _ in range(max_bucket_size):
+                for colo_key in colo_order:
+                    bucket = colo_buckets[colo_key]
+                    for candidate in bucket:
+                        if candidate.ip in selected_ips:
+                            continue
+                        selected.append(candidate)
+                        selected_ips.add(candidate.ip)
+                        break
+                    if len(selected) >= target_count:
+                        break
+                if len(selected) >= target_count:
+                    break
+
+    # Summarize final selected colos & subnets
     selected_counts: Dict[str, int] = {}
+    subnet_counts_summary: Dict[str, int] = {}
     for item in selected:
         ck = item.colo.strip().upper() if item.colo and item.colo.strip() else "N/A"
         selected_counts[ck] = selected_counts.get(ck, 0) + 1
+        sub = get_ip_subnet(item.ip)
+        subnet_counts_summary[sub] = subnet_counts_summary.get(sub, 0) + 1
+
     selected_dist = ", ".join(
         f"{c}[{get_colo_region(c)}]:{cnt}" if get_colo_region(c) != c else f"{c}:{cnt}"
         for c, cnt in selected_counts.items()
     )
 
-    logger.info("选定 Top %d 个优选 IP (地区分布: %s):", len(selected), selected_dist or "无")
+    logger.info(
+        "选定 Top %d 个优选 IP (覆盖 %d 个大区/机房: %s; 覆盖 %d 个独立 C 段):",
+        len(selected),
+        len(selected_counts),
+        selected_dist or "无",
+        len(subnet_counts_summary),
+    )
     for idx, item in enumerate(selected, start=1):
-        logger.info("  [%02d] %s", idx, item)
+        logger.info("  [%02d] %s (网段: %s)", idx, item, get_ip_subnet(item.ip))
 
     return selected

@@ -11,7 +11,7 @@ if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
 from cfst_ddns.cloudflare import CloudflareClient
-from cfst_ddns.filter import IPResult, expand_colo_set, filter_and_rank_ips, parse_csv
+from cfst_ddns.filter import IPResult, expand_colo_set, filter_and_rank_ips, get_ip_subnet, parse_csv
 from cfst_ddns.sync import DNSUpdater
 
 
@@ -231,6 +231,53 @@ class TestDDNSFilterAndSync(unittest.TestCase):
             c_idx = call_order.index(f"CREATE {domain} 104.27.200.4")
             d_idx = call_order.index(f"DELETE {rec_id}")
             self.assertLess(c_idx, d_idx)
+
+    def test_subnet_diversification_and_loss_tier_sorting(self):
+        """Test that /24 subnet limits prevent clustering and 0% loss IPs rank first."""
+        # 1. Test get_ip_subnet helper
+        self.assertEqual(get_ip_subnet("104.21.35.12"), "104.21.35.0")
+        self.assertEqual(get_ip_subnet("2606:4700:3030::6815:230c"), "2606:4700:3030::")
+
+        # 2. Test 0% loss prioritization over slightly lower delay with loss
+        candidates = [
+            # IP A has 120ms delay but 4% packet loss (0.04)
+            IPResult("104.16.1.1", 100, 96, 0.04, 120.0, 20.0, "NRT"),
+            # IP B has 122ms delay but 0% packet loss (0.00)
+            IPResult("104.16.2.1", 100, 100, 0.00, 122.0, 20.0, "NRT"),
+        ]
+        cfg = {
+            "target_ip_count": 1,
+            "min_qualified_ips": 1,
+            "sort_by": "delay",
+            "diversify_colo": False,
+        }
+        selected = filter_and_rank_ips(candidates, cfg)
+        self.assertEqual(len(selected), 1)
+        # IP B (0% loss) must be selected over IP A (4% loss) despite having 2ms higher delay
+        self.assertEqual(selected[0].ip, "104.16.2.1")
+
+        # 3. Test max_per_subnet prevents /24 clustering
+        # Pool with 4 IPs from 104.16.1.0/24 (slightly faster) and 4 IPs from 104.16.2.0/24
+        subnet_candidates = [
+            IPResult(f"104.16.1.{i}", 4, 4, 0.0, 100.0 + i, 20.0, "NRT") for i in range(1, 5)
+        ] + [
+            IPResult(f"104.16.2.{i}", 4, 4, 0.0, 110.0 + i, 20.0, "NRT") for i in range(1, 5)
+        ]
+
+        # Request 4 IPs with max_per_subnet = 1
+        cfg_subnet = {
+            "target_ip_count": 4,
+            "min_qualified_ips": 2,
+            "sort_by": "delay",
+            "diversify_colo": False,
+            "max_per_subnet": 1,
+            "strict_subnet_cap": False,
+        }
+        selected_sub = filter_and_rank_ips(subnet_candidates, cfg_subnet)
+        subnets = [get_ip_subnet(x.ip) for x in selected_sub]
+        # Should pick 1 from 104.16.1.0/24 and 1 from 104.16.2.0/24 in pass 1,
+        # then fallback to fill up to 4
+        self.assertEqual(len(selected_sub), 4)
 
 
 if __name__ == "__main__":

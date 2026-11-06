@@ -78,10 +78,9 @@ class DNSUpdater:
 
     def sync(self, candidates: List[IPResult], dry_run: bool = False) -> SyncResult:
         """Execute the safe DNS synchronization workflow across all configured domains."""
-        # 1. Protection 2: Preflight check
-        zone_id = self.preflight_check()
-
-        # 2. Protection 1 & 4: Check minimum qualified IPs and empty results
+        # 1. Protection 1 & 4: Check minimum qualified IPs and empty results first!
+        # If no qualified IPs were found, abort immediately to protect existing online DNS
+        # and avoid unnecessary network calls to Cloudflare API.
         if not candidates or len(candidates) < self.min_qualified_ips:
             msg = (
                 f"[防护拦截 1&4] 测速达标 IP 数量不足 ({len(candidates)} < 最低阈值 {self.min_qualified_ips})！\n"
@@ -93,6 +92,9 @@ class DNSUpdater:
                 target_ips=[c.ip for c in candidates],
                 message=msg,
             )
+
+        # 2. Protection 2: Preflight check (only when we actually have enough IPs to update!)
+        zone_id = self.preflight_check()
 
         target_ips = [c.ip for c in candidates]
         logger.info(

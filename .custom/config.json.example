@@ -3,6 +3,7 @@
     "api_token": "YOUR_CLOUDFLARE_API_TOKEN",
     "zone_name": "example.com",
     "zone_id": "",
+    "proxy": "",
     "record_names": [
       "*.cf.example.com"
     ],
@@ -32,7 +33,10 @@
     "sort_by": "delay",
     "diversify_colo": true,
     "max_per_colo": 2,
+    "max_per_region": 0,
+    "max_per_subnet": 2,
     "strict_colo_cap": false,
+    "strict_subnet_cap": false,
     "exclude_colo": [
       "HKG",
       "EU"
