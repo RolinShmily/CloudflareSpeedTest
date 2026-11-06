@@ -141,8 +141,8 @@ def run_speedtest(
     # all records when thresholds are close
     cmd.append("-debug")
 
-    # HTTPing mode (default True for accurate colo resolution and TLS RTT)
-    if speedtest_config.get("httping", True):
+    # HTTPing mode (default False for ultra-fast and lightweight TCPing)
+    if speedtest_config.get("httping", False):
         cmd.append("-httping")
 
     # HTTPing valid response code

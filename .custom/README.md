@@ -4,8 +4,8 @@
 
 ## 核心特性
 
-- **初筛锁区 + 跨地区轮询打散**：通过 `HTTP HEAD` 零流量初筛目标大区（默认 `JP/SG/KR/TW`，排除 `HKG/EU`），并自动联动传递给 `cfst -cfcolo`，再按大区穿插、单机房配额上限（`max_per_colo: 2`）与 `/24` 子网防扎堆（`max_per_subnet: 2`）轮询抽取，防止单一机房或单 C 段垄断结果池。
-- **动态达标测速省流**：通过 `-sl` 速度下限保障测试真实带宽，仅对目标地区合格 IP 执行 4 秒下载探活，12 小时周期下月均流量仅约 `50~70 GB`。
+- **纯净测速与跨地区轮询打散**：默认采用轻量稳定的 TCPing 延迟测速（数十毫秒极速完成，零 TLS 握手开销），不预设地域壁垒，自动按实际路由测出最优节点，并按机房与 `/24` 子网防扎堆（`max_per_subnet: 2`）轮询抽取，防止单一 C 段垄断结果池。
+- **动态达标测速省流**：通过 `-sl` 速度下限保障真实下载带宽，仅对优质候选 IP 执行 4 秒下载探活，12 小时周期下月均流量仅约 `50~70 GB`。
 - **四重安全熔断**：API 预检探活、最低合格 IP 数量熔断（`< min_qualified_ips` 放弃更新）、先增后删（Add-before-Delete 平滑切换）、测速异常保留线上记录。
 - **零三方依赖**：基于 Python 标准库实现，支持 `uv run` 与原生 `python3` 直接运行。
 
@@ -64,29 +64,29 @@ sudo bash .custom/deploy.sh --uninstall-systemd
     "specified_ips": [],
     "test_url": "https://cf.example.com/download",
     "port": 443,
-    "thread_count": 200,
+    "thread_count": 64,                        // 测速并发线程数 (家宽建议 64~100)
     "ping_times": 4,
     "candidate_pool_size": 30,                 // 下载测速候选池数量 (-dn)
     "download_time": 4,                        // 单 IP 下载探活时长 (-dt，秒)
-    "httping": true,                           // 开启 HTTP HEAD 测速并提取地区码
+    "httping": false,                          // 默认使用纯 TCPing 测速 (超快且无 TLS 超时问题)
     "httping_code": 200,
-    "colo": "",                                // 留空自动继承 filter.include_colo；设为 'NONE' 禁用地区初筛
+    "colo": "",                                // 留空不限地区；若开启 httping 且指定了 include_colo 则自动联动
     "extra_args": []
   },
   "filter": {
     "target_ip_count": 10,                     // 最终写入 DNS 的 IP 数量
-    "min_qualified_ips": 5,                    // 最低达标熔断阈值
+    "min_qualified_ips": 3,                    // 最低达标熔断阈值
     "sort_by": "delay",                        // 排序策略: delay / speed / balanced / colo (0%丢包绝对优先)
     "diversify_colo": true,                    // 启用跨地区轮询打散
-    "max_per_colo": 2,                         // 首轮单机房最大入选数
+    "max_per_colo": 0,                         // 首轮单机房最大入选数 (0 为不限制)
     "max_per_region": 0,                       // 首轮单大区最大入选数 (0 为不限制)
     "max_per_subnet": 2,                       // 同一 /24 C段子网最大入选数 (防同一集群连带阻断)
     "strict_colo_cap": false,                  // false: 机房不足时弹性轮询补满; true: 严格限制不超上限
     "strict_subnet_cap": false,                // false: 子网不足时弹性放宽; true: 严格限制不超上限
-    "exclude_colo": ["HKG", "EU"],             // 排除大区 (HK/MO/EU/US) 或三字码
-    "include_colo": ["JP", "SG", "KR", "TW"],  // 限定大区 (JP/SG/KR/TW/US) 或三字码
+    "exclude_colo": [],                        // 留空不排除任何机房
+    "include_colo": [],                        // 留空不限制任何机房 (根据家宽实际物理路由优选)
     "min_delay_ms": 0.0,
-    "max_delay_ms": 350.0,                     // 平均延迟上限 (HTTPing 模式包含完整 HTTPS 握手，建议 300~400ms；TCPing 可设 200ms)
+    "max_delay_ms": 250.0,                     // TCPing 平均延迟上限 (建议 200~300ms)
     "max_loss_rate": 0.05,
     "min_speed_mb": 5.0
   },
