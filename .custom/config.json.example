@@ -48,6 +48,22 @@
     "interval_hours": 12,
     "random_delay_minutes": 0
   },
+  "notify": {
+    "enabled": true,
+    "provider": "feishu",
+    "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_FEISHU_BOT_TOKEN",
+    "secret": "",
+    "msg_type": "interactive",
+    "events": [
+      "success",
+      "skipped_protection",
+      "error"
+    ],
+    "notify_on_dry_run": false,
+    "timeout": 10,
+    "proxy": "",
+    "max_retries": 1
+  },
   "general": {
     "github_proxy": "https://gh-proxy.org/",
     "log_level": "INFO",

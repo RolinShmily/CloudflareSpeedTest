@@ -1,17 +1,20 @@
 """Unit tests for cfst_ddns logic."""
 
+import argparse
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 src_dir = Path(__file__).resolve().parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
+from cfst_ddns import main as main_module
 from cfst_ddns.cloudflare import CloudflareClient
 from cfst_ddns.filter import IPResult, expand_colo_set, filter_and_rank_ips, get_ip_subnet, parse_csv
+from cfst_ddns.notify import DEFAULT_EVENTS, CycleReport, WebhookNotifier
 from cfst_ddns.sync import DNSUpdater
 
 
@@ -278,6 +281,194 @@ class TestDDNSFilterAndSync(unittest.TestCase):
         # Should pick 1 from 104.16.1.0/24 and 1 from 104.16.2.0/24 in pass 1,
         # then fallback to fill up to 4
         self.assertEqual(len(selected_sub), 4)
+
+
+class TestWebhookNotifier(unittest.TestCase):
+    """验证 Webhook 通知模块的配置解析、消息渲染与发送降级行为。"""
+
+    FEISHU_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/0000-test-token"
+
+    def _report(self, **kwargs):
+        base = dict(
+            status="success",
+            target_ips=["104.16.1.1", "104.16.2.2"],
+            domains=[
+                {
+                    "domain": "*.cf.example.com",
+                    "status": "success",
+                    "added_ips": ["104.16.1.1"],
+                    "deleted_ips": ["104.16.9.9"],
+                    "unchanged_ips": ["104.16.2.2"],
+                }
+            ],
+            duration=42.5,
+        )
+        base.update(kwargs)
+        return CycleReport(**base)
+
+    def test_provider_detection(self):
+        self.assertEqual(WebhookNotifier._detect_provider(self.FEISHU_URL), "feishu")
+        self.assertEqual(
+            WebhookNotifier._detect_provider("https://open.larksuite.com/open-apis/bot/v2/hook/x"), "feishu"
+        )
+        self.assertEqual(WebhookNotifier._detect_provider("https://oapi.dingtalk.com/robot/send?x=1"), "dingtalk")
+        self.assertEqual(WebhookNotifier._detect_provider("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?k=1"), "wecom")
+        self.assertEqual(WebhookNotifier._detect_provider("https://example.com/hook"), "generic")
+        self.assertEqual(WebhookNotifier._detect_provider(""), "generic")
+
+    def test_enabled_defaults_and_empty_url(self):
+        # 显式未配置 enabled，但有 URL -> 自动启用
+        self.assertTrue(WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL}).enabled)
+        # 无 URL -> 禁用
+        self.assertFalse(WebhookNotifier.from_config({}).enabled)
+        # 显式关闭
+        self.assertFalse(WebhookNotifier.from_config({"enabled": False, "webhook_url": self.FEISHU_URL}).enabled)
+
+    def test_render_contains_core_fields(self):
+        notifier = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL})
+        title, body = notifier._render(self._report())
+        self.assertIn("更新成功", title)
+        self.assertIn("success", body)
+        self.assertIn("*.cf.example.com", body)
+        self.assertIn("104.16.1.1", body)
+        self.assertIn("新增 1", body)
+        self.assertIn("删除 1", body)
+        self.assertIn("42.5s", body)
+
+    def test_feishu_payload_and_signature(self):
+        notifier = WebhookNotifier.from_config(
+            {"webhook_url": self.FEISHU_URL, "secret": "test-secret", "msg_type": "interactive"}
+        )
+        payload = notifier._build_payload("标题", "正文", "error", self._report(status="error", error="boom"))
+        self.assertEqual(payload["msg_type"], "interactive")
+        self.assertEqual(payload["card"]["header"]["template"], "red")
+        self.assertIn("正文", payload["card"]["elements"][0]["text"]["content"])
+
+        # 签名算法固定向量，防止回归（HMAC-SHA256(key="ts\nsecret", msg="") -> base64）
+        self.assertEqual(
+            WebhookNotifier._feishu_sign("sec", 1700000000),
+            "ttGYnPblC3CcNExnS7y5igm57JhpqZJtHpJ+TURiUeg=",
+        )
+
+    def test_text_mode_payload(self):
+        notifier = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL, "msg_type": "text"})
+        payload = notifier._build_payload("标题", "**状态**: ok", "success", self._report())
+        self.assertEqual(payload["msg_type"], "text")
+        self.assertNotIn("**", payload["content"]["text"])
+
+    def test_events_and_dry_run_filtering(self):
+        notifier = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL, "events": ["error"]})
+        with unittest.mock.patch.object(WebhookNotifier, "_post", return_value=True) as mocked:
+            self.assertFalse(notifier.notify_cycle(self._report(status="success")))
+            mocked.assert_not_called()
+            self.assertTrue(notifier.notify_cycle(self._report(status="error")))
+            mocked.assert_called_once()
+
+        notifier_all = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL})
+        self.assertEqual(notifier_all.events, list(DEFAULT_EVENTS))
+        with unittest.mock.patch.object(WebhookNotifier, "_post", return_value=True):
+            # Dry Run 默认不推送
+            self.assertFalse(notifier_all.notify_cycle(self._report(status="dry_run", dry_run=True)))
+        notifier_dry = WebhookNotifier.from_config(
+            {"webhook_url": self.FEISHU_URL, "notify_on_dry_run": True}
+        )
+        with unittest.mock.patch.object(WebhookNotifier, "_post", return_value=True):
+            self.assertTrue(notifier_dry.notify_cycle(self._report(status="dry_run", dry_run=True)))
+
+    def test_disabled_never_posts(self):
+        notifier = WebhookNotifier.from_config({"enabled": False, "webhook_url": self.FEISHU_URL})
+        with unittest.mock.patch.object(WebhookNotifier, "_post", return_value=True) as mocked:
+            self.assertFalse(notifier.notify_cycle(self._report()))
+            mocked.assert_not_called()
+
+    def test_post_failure_is_swallowed(self):
+        import urllib.error
+
+        notifier = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL, "max_retries": 0})
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.URLError("network down")
+        with patch("cfst_ddns.notify.urllib.request.build_opener", return_value=opener):
+            self.assertFalse(notifier.notify_cycle(self._report()))
+
+    def test_post_success_with_business_code(self):
+        def fake_opener(payload_code):
+            opener = MagicMock()
+            resp = MagicMock()
+            resp.read.return_value = ('{"code": %d, "msg": "ok"}' % payload_code).encode("utf-8")
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            opener.open.return_value = resp
+            return opener
+
+        notifier = WebhookNotifier.from_config({"webhook_url": self.FEISHU_URL, "max_retries": 0})
+        with patch(
+            "cfst_ddns.notify.urllib.request.build_opener", return_value=fake_opener(0)
+        ):
+            self.assertTrue(notifier.notify_cycle(self._report()))
+        with patch(
+            "cfst_ddns.notify.urllib.request.build_opener", return_value=fake_opener(19021)
+        ):
+            self.assertFalse(notifier.notify_cycle(self._report()))
+
+    def test_generic_payload_structure(self):
+        notifier = WebhookNotifier.from_config({"webhook_url": "https://example.com/hook"})
+        payload = notifier._build_payload("标题", "正文", "success", self._report())
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["target_ips"], ["104.16.1.1", "104.16.2.2"])
+        self.assertIn("正文", payload["text"])
+        self.assertIn("timestamp", payload)
+
+
+class TestCycleNotificationIntegration(unittest.TestCase):
+    """确认 execute_cycle 在各类退出路径上推送通知，且通知故障不影响退出码。"""
+
+    def _args(self, **kwargs):
+        base = dict(dry_run=False, verbose=False, verify_only=False, no_notify=False)
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def _config(self):
+        return {"notify": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/test"}}
+
+    def test_notify_on_success(self):
+        def fake_core(config, args, report):
+            report.status = "success"
+            report.target_ips = ["1.1.1.1"]
+            return 0
+
+        with patch.object(main_module, "_execute_cycle_core", side_effect=fake_core), patch.object(
+            WebhookNotifier, "notify_cycle", return_value=True
+        ) as notify:
+            code = main_module.execute_cycle(self._config(), self._args())
+        self.assertEqual(code, 0)
+        notify.assert_called_once()
+        report = notify.call_args[0][0]
+        self.assertEqual(report.status, "success")
+        self.assertEqual(report.target_ips, ["1.1.1.1"])
+        self.assertGreaterEqual(report.duration, 0.0)
+
+    def test_notify_swallows_notifier_exception(self):
+        with patch.object(main_module, "_execute_cycle_core", return_value=0), patch.object(
+            WebhookNotifier, "notify_cycle", side_effect=RuntimeError("boom")
+        ):
+            self.assertEqual(main_module.execute_cycle(self._config(), self._args()), 0)
+
+    def test_core_exception_becomes_error_report(self):
+        with patch.object(main_module, "_execute_cycle_core", side_effect=RuntimeError("kaboom")), patch.object(
+            WebhookNotifier, "notify_cycle", return_value=True
+        ) as notify:
+            self.assertEqual(main_module.execute_cycle(self._config(), self._args()), 1)
+        report = notify.call_args[0][0]
+        self.assertEqual(report.status, "error")
+        self.assertIn("kaboom", report.error)
+
+    def test_verify_only_and_no_notify_skip_push(self):
+        with patch.object(main_module, "_execute_cycle_core", return_value=0), patch.object(
+            WebhookNotifier, "notify_cycle", return_value=True
+        ) as notify:
+            main_module.execute_cycle(self._config(), self._args(verify_only=True))
+            main_module.execute_cycle(self._config(), self._args(no_notify=True))
+        notify.assert_not_called()
 
 
 if __name__ == "__main__":

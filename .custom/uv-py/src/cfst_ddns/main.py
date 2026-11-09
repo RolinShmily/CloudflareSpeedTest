@@ -24,11 +24,13 @@ if str(src_dir) not in sys.path:
 try:
     from .cloudflare import CloudflareAPIError, CloudflareClient
     from .filter import filter_and_rank_ips, parse_csv
+    from .notify import CycleReport, WebhookNotifier
     from .speedtest import SpeedTestError, run_speedtest
     from .sync import DNSUpdater
 except (ImportError, ValueError):
     from cfst_ddns.cloudflare import CloudflareAPIError, CloudflareClient
     from cfst_ddns.filter import filter_and_rank_ips, parse_csv
+    from cfst_ddns.notify import CycleReport, WebhookNotifier
     from cfst_ddns.speedtest import SpeedTestError, run_speedtest
     from cfst_ddns.sync import DNSUpdater
 
@@ -103,11 +105,49 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     elif "CF_RECORD_NAME" in os.environ:
         cf["record_names"] = [s.strip() for s in os.environ["CF_RECORD_NAME"].split(",") if s.strip()]
 
+    # Webhook notification overrides (Feishu webhook URL / 签名密钥)
+    notify = config.setdefault("notify", {})
+    for env_key in ("CFST_WEBHOOK_URL", "FEISHU_WEBHOOK_URL"):
+        if os.environ.get(env_key):
+            notify["webhook_url"] = os.environ[env_key].strip()
+            notify.setdefault("enabled", True)
+            break
+    for env_key in ("CFST_WEBHOOK_SECRET", "FEISHU_WEBHOOK_SECRET"):
+        if os.environ.get(env_key):
+            notify["secret"] = os.environ[env_key].strip()
+            break
+
     return config
 
 
 def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
-    """Execute a single speedtest + DNS update cycle."""
+    """Execute a single cycle and push a webhook summary when it finishes."""
+    report = CycleReport(dry_run=getattr(args, "dry_run", False))
+    notifier = WebhookNotifier.from_config(config.get("notify", {}))
+
+    try:
+        exit_code = _execute_cycle_core(config, args, report)
+    except Exception as e:  # 兜底：任何未捕获异常也要能推送失败通知
+        logger.error("任务执行发生未预期异常: %s", e, exc_info=getattr(args, "verbose", False))
+        report.status = "error"
+        report.error = f"{type(e).__name__}: {e}"
+        exit_code = 1
+    finally:
+        report.duration = time.time() - report.started_at
+        # --verify-only 属于交互式诊断，无需推送；--no-notify 显式关闭
+        if getattr(args, "verify_only", False) or getattr(args, "no_notify", False):
+            logger.debug("[通知] 当前模式跳过 Webhook 推送。")
+        else:
+            try:
+                notifier.notify_cycle(report)
+            except Exception as e:  # 通知失败绝不能影响主流程
+                logger.warning("[通知] 推送过程中发生异常，已忽略: %s", e)
+
+    return exit_code
+
+
+def _execute_cycle_core(config: Dict[str, Any], args: argparse.Namespace, report: CycleReport) -> int:
+    """Run speedtest + filtering + DNS sync, filling the report as it progresses."""
     cf_config = config.get("cloudflare", {})
     speedtest_config = config.get("speedtest", {})
     filter_config = config.get("filter", {})
@@ -124,10 +164,13 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
         updater = DNSUpdater(client, cf_config, filter_config)
     except Exception as e:
         logger.error("初始化 Cloudflare 客户端失败: %s", e)
+        report.status = "error"
+        report.error = f"初始化 Cloudflare 客户端失败: {e}"
         return 1
 
     # Verify only mode
     if args.verify_only:
+        report.status = "verify"
         logger.info("正在执行环境与权限诊断...")
         try:
             zone_id = updater.preflight_check()
@@ -169,9 +212,13 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
         except SpeedTestError as e:
             logger.error("[测速失败] %s", e)
             logger.warning("[防护规则触发] 保留上一轮 DNS 解析，退出更新。")
+            report.status = "skipped_protection"
+            report.message = f"测速阶段失败，已保留上一轮 DNS 解析: {e}"
             return 0  # Exit cleanly to not break timers
         except Exception as e:
             logger.error("执行测速时发生未预期异常: %s", e, exc_info=args.verbose)
+            report.status = "error"
+            report.error = f"测速阶段异常: {e}"
             return 1
     else:
         logger.info("已跳过测速环节，使用指定数据源: %s", csv_file)
@@ -182,19 +229,42 @@ def execute_cycle(config: Dict[str, Any], args: argparse.Namespace) -> int:
         selected_ips = filter_and_rank_ips(candidates, filter_config)
     except Exception as e:
         logger.error("解析或筛选测速结果失败: %s", e, exc_info=args.verbose)
+        report.status = "error"
+        report.error = f"解析或筛选测速结果失败: {e}"
         return 1
 
     # Sync DNS
     try:
         result = updater.sync(selected_ips, dry_run=args.dry_run)
         logger.info("同步执行状态: %s", result.status)
+        report.status = result.status
+        report.target_ips = list(result.target_ips)
+        report.message = result.message
+        report.domains = [
+            {
+                "domain": d.domain,
+                "status": d.status,
+                "target_ips": list(d.target_ips),
+                "current_ips": list(d.current_ips),
+                "added_ips": list(d.added_ips),
+                "deleted_ips": list(d.deleted_ips),
+                "unchanged_ips": list(d.unchanged_ips),
+            }
+            for d in result.details
+        ]
         logger.info("=== 任务完成 ===")
         return 0
     except CloudflareAPIError as e:
         logger.error("Cloudflare API 交互失败: %s", e)
+        report.status = "error"
+        report.target_ips = [c.ip for c in selected_ips]
+        report.error = f"Cloudflare API 交互失败: {e}"
         return 1
     except Exception as e:
         logger.error("DNS 同步过程发生异常: %s", e, exc_info=args.verbose)
+        report.status = "error"
+        report.target_ips = [c.ip for c in selected_ips]
+        report.error = f"DNS 同步过程发生异常: {e}"
         return 1
 
 
@@ -237,6 +307,16 @@ def main() -> int:
         help="常驻守护进程模式: 按照 config.json 中的 schedule.interval_hours 循环执行",
     )
     parser.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="本次运行不推送 Webhook 通知 (用于手动调试或临时静默)",
+    )
+    parser.add_argument(
+        "--test-notify",
+        action="store_true",
+        help="仅发送一条 Webhook 测试消息并退出 (用于验证飞书机器人配置)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -253,6 +333,15 @@ def main() -> int:
 
     general_config = config.get("general", {})
     setup_logging(general_config, verbose=args.verbose)
+
+    if args.test_notify:
+        notifier = WebhookNotifier.from_config(config.get("notify", {}))
+        if not notifier.webhook_url:
+            logger.error("未配置 notify.webhook_url，无法发送测试通知。")
+            return 1
+        ok = notifier.send_test()
+        logger.info("测试通知发送结果: %s", "成功" if ok else "失败")
+        return 0 if ok else 1
 
     if not args.daemon:
         return execute_cycle(config, args)
